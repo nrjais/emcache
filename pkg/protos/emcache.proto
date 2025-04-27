@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package emcache;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/nrjais/emcache/pkg/protos";
+
+service EmcacheService {
+  rpc DownloadDb (DownloadDbRequest) returns (stream DownloadDbResponse);
+
+  rpc GetOplogEntries (GetOplogEntriesRequest) returns (GetOplogEntriesResponse);
+
+  rpc AddCollection (AddCollectionRequest) returns (AddCollectionResponse);
+}
+
+message DownloadDbRequest {
+  string collection_name = 1;
+}
+
+message DownloadDbResponse {
+  int32 version = 1;
+  bytes chunk = 2;
+}
+
+message GetOplogEntriesRequest {
+  repeated string collection_names = 1;
+  int64 after_index = 2;
+  int32 limit = 3;
+}
+
+message GetOplogEntriesResponse {
+  repeated OplogEntry entries = 1;
+}
+
+message OplogEntry {
+  enum OperationType {
+    OPERATION_TYPE_UNSPECIFIED = 0;
+    UPSERT = 1;
+    DELETE = 2;
+  }
+
+  int64 index = 1;
+  OperationType operation = 2;
+  string id = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  string collection = 5;
+  google.protobuf.Struct data = 6;
+  int32 version = 7;
+}
+
+message AddCollectionRequest {
+  string collection_name = 1;
+}
+
+message AddCollectionResponse {
+}
