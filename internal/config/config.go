@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/go-playground/validator"
+	"github.com/go-playground/validator/v10"
 	"github.com/spf13/viper"
 )
 
@@ -15,10 +15,10 @@ type Config struct {
 	GRPCPort           string            `mapstructure:"grpc_port" validate:"required"`
 	SQLiteDir          string            `mapstructure:"sqlite_dir" validate:"required"`
 	LogLevel           string            `mapstructure:"log_level" validate:"required,uppercase"`
-	CoordinatorOptions CoordinatorConfig `mapstructure:"coordinator" validate:"required,dive"`
-	LeaderOptions      LeaderConfig      `mapstructure:"leader" validate:"required,dive"`
-	FollowerOptions    FollowerConfig    `mapstructure:"follower" validate:"required,dive"`
-	SnapshotOptions    SnapshotConfig    `mapstructure:"snapshot" validate:"required,dive"`
+	CoordinatorOptions CoordinatorConfig `mapstructure:"coordinator" validate:"required"`
+	LeaderOptions      LeaderConfig      `mapstructure:"leader" validate:"required"`
+	FollowerOptions    FollowerConfig    `mapstructure:"follower" validate:"required"`
+	SnapshotOptions    SnapshotConfig    `mapstructure:"snapshot" validate:"required"`
 }
 
 type CoordinatorConfig struct {

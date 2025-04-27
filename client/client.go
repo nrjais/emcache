@@ -37,9 +37,6 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// DownloadDb initiates a stream to download the database for a given collection,
-// writing the content to the provided writer. It returns the database version
-// and any error encountered.
 func (c *Client) DownloadDb(ctx context.Context, collectionName string, writer io.Writer) (int32, error) {
 	req := &pb.DownloadDbRequest{CollectionName: collectionName}
 	stream, err := c.client.DownloadDb(ctx, req)

@@ -87,9 +87,9 @@ func (cf *CentralFollower) initializeGlobalLastOplogID() {
 			continue
 		}
 
-		tempDB, dbPath, err := openCollectionDB(collectionName, cf.sqliteBaseDir, version)
+		tempDB, err := openCollectionDB(collectionName, cf.sqliteBaseDir, version)
 		if err != nil {
-			log.Printf("[CentralFollower:Init] Failed to open DB %s to read metadata: %v", dbPath, err)
+			log.Printf("[CentralFollower:Init] Failed to open DB %s to read metadata: %v", collectionName, err)
 			continue
 		}
 
@@ -97,7 +97,7 @@ func (cf *CentralFollower) initializeGlobalLastOplogID() {
 		tempDB.Close()
 
 		if err != nil {
-			log.Printf("[CentralFollower:Init] Failed to read last applied index from %s: %v", dbPath, err)
+			log.Printf("[CentralFollower:Init] Failed to read last applied index from %s: %v", collectionName, err)
 			continue
 		}
 
@@ -164,16 +164,16 @@ func (cf *CentralFollower) runMainLoop(ctx context.Context, wg *sync.WaitGroup) 
 					continue
 				}
 
-				dbConn, dbPath, err := cf.getOrCreateConnection(ctx, entry.Collection, entry.Version)
+				dbConn, err := cf.getOrCreateConnection(ctx, entry.Collection, entry.Version)
 				if err != nil {
-					log.Printf("[CentralFollower] CRITICAL: Failed to get/create SQLite DB for %s v%d (%s): %v. Halting batch processing for this cycle.", entry.Collection, entry.Version, dbPath, err)
+					log.Printf("[CentralFollower] CRITICAL: Failed to get/create SQLite DB for %s v%d: %v. Halting batch processing for this cycle.", entry.Collection, entry.Version, err)
 					batchFailed = true
 					break
 				}
 
-				err = cf.applySingleEntry(ctx, dbConn, entry, dbPath)
+				err = cf.applySingleEntry(ctx, dbConn, entry)
 				if err != nil {
-					log.Printf("[CentralFollower] CRITICAL: Failed to apply oplog entry ID %d (%s v%d, Op: %s, DocID: %s) to %s: %v. Halting batch processing for this cycle.", entry.ID, entry.Collection, entry.Version, entry.Operation, entry.DocID, dbPath, err)
+					log.Printf("[CentralFollower] CRITICAL: Failed to apply oplog entry ID %d to %s: %v. Halting batch processing for this cycle.", entry.ID, entry.Collection, err)
 					batchFailed = true
 					break
 				}
@@ -205,6 +205,11 @@ func (cf *CentralFollower) runCleanupLoop(ctx context.Context, wg *sync.WaitGrou
 
 	log.Println("[CentralFollower] Cleanup loop started.")
 
+	log.Println("[CentralFollower] Running initial cleanup of old SQLite files...")
+	if err := cf.cleanupOldFiles(ctx); err != nil {
+		log.Printf("[CentralFollower] Error during initial cleanup: %v", err)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -219,7 +224,7 @@ func (cf *CentralFollower) runCleanupLoop(ctx context.Context, wg *sync.WaitGrou
 	}
 }
 
-func (cf *CentralFollower) getOrCreateConnection(ctx context.Context, collectionName string, version int) (*sql.DB, string, error) {
+func (cf *CentralFollower) getOrCreateConnection(ctx context.Context, collectionName string, version int) (*sql.DB, error) {
 	cf.connMutex.Lock()
 	defer cf.connMutex.Unlock()
 
@@ -228,7 +233,7 @@ func (cf *CentralFollower) getOrCreateConnection(ctx context.Context, collection
 
 	if conn, exists := cf.connections[dbKey]; exists {
 		if err := conn.PingContext(ctx); err == nil {
-			return conn, dbPath, nil
+			return conn, nil
 		}
 		log.Printf("[CentralFollower] Stale connection detected for %s. Closing and reopening.", dbKey)
 		conn.Close()
@@ -236,39 +241,25 @@ func (cf *CentralFollower) getOrCreateConnection(ctx context.Context, collection
 	}
 
 	log.Printf("[CentralFollower] Opening connection for %s at %s", dbKey, dbPath)
-	sqliteDB, actualPath, err := openCollectionDB(collectionName, cf.sqliteBaseDir, version)
+	sqliteDB, err := openCollectionDB(collectionName, cf.sqliteBaseDir, version)
 	if err != nil {
-		return nil, actualPath, fmt.Errorf("failed to open/create db %s: %w", actualPath, err)
-	}
-	dbPath = actualPath
-
-	fileExists := false
-	if _, statErr := os.Stat(dbPath); statErr == nil {
-		fileExists = true
-	} else if !os.IsNotExist(statErr) {
-		sqliteDB.Close()
-		return nil, dbPath, fmt.Errorf("error stating new db file %s: %w", dbPath, statErr)
+		return nil, fmt.Errorf("failed to open/create db %s: %w", dbPath, err)
 	}
 
-	if !fileExists {
-		if err := setLocalDBVersion(sqliteDB, version); err != nil {
-			sqliteDB.Close()
-			return nil, dbPath, fmt.Errorf("failed to set version %d in new db %s: %w", version, dbPath, err)
-		}
-		log.Printf("[CentralFollower] Set internal version for new DB %s to %d", dbPath, version)
-	} else {
-		localVersion, found := GetLocalDBVersion(sqliteDB)
-		if !found || localVersion != version {
-			sqliteDB.Close()
-			return nil, dbPath, fmt.Errorf("internal version mismatch in existing file %s! Expected: %d, Found: %d (found=%t)", dbPath, version, localVersion, found)
-		}
+	reset, err := GetOrResetLocalDBVersion(sqliteDB, version)
+	if err != nil {
+		log.Printf("[CentralFollower] Error getting/resetting internal version for %s: %v", dbPath, err)
+		return nil, fmt.Errorf("failed to get/reset internal version for %s: %w", dbPath, err)
+	}
+	if reset {
+		log.Printf("[CentralFollower] version mismatch in existing file, resetting to %d", version)
 	}
 
 	cf.connections[dbKey] = sqliteDB
-	return sqliteDB, dbPath, nil
+	return sqliteDB, nil
 }
 
-func (cf *CentralFollower) applySingleEntry(ctx context.Context, dbConn *sql.DB, entry db.OplogEntry, dbPath string) error {
+func (cf *CentralFollower) applySingleEntry(ctx context.Context, dbConn *sql.DB, entry db.OplogEntry) error {
 	tx, err := dbConn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin sqlite transaction for entry ID %d: %w", entry.ID, err)
@@ -280,22 +271,12 @@ func (cf *CentralFollower) applySingleEntry(ctx context.Context, dbConn *sql.DB,
 			panic(r)
 		} else if commitErr != nil {
 			if rbErr := tx.Rollback(); rbErr != nil {
-				log.Printf("[CentralFollower] Error rolling back transaction for %s after commit error: %v (Original error: %v)", dbPath, rbErr, commitErr)
+				log.Printf("[CentralFollower] Error rolling back transaction for %s after commit error: %v (Original error: %v)", entry.Collection, rbErr, commitErr)
 			}
 		}
 	}()
 
-	lastAppliedHere, err := getLastAppliedOplogIndexTx(tx)
-	if err != nil {
-		commitErr = fmt.Errorf("failed to get last applied index within transaction for entry ID %d: %w", entry.ID, err)
-		return commitErr
-	}
-
-	if entry.ID <= lastAppliedHere {
-		return nil
-	}
-
-	if err := applyOplogEntry(tx, entry.Collection, entry); err != nil {
+	if err := applyOplogEntry(tx, entry); err != nil {
 		commitErr = fmt.Errorf("failed to apply operation for entry ID %d: %w", entry.ID, err)
 		return commitErr
 	}
