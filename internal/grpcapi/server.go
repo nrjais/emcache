@@ -8,15 +8,15 @@ import (
 	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/nrjais/emcache/internal/db"
 	"github.com/nrjais/emcache/internal/follower"
+	"github.com/nrjais/emcache/internal/snapshot"
 	pb "github.com/nrjais/emcache/pkg/protos"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 type server struct {
@@ -31,7 +31,6 @@ func NewEmcacheServer(pgPool *pgxpool.Pool, sqliteBaseDir string) pb.EmcacheServ
 		sqliteDir: sqliteBaseDir,
 	}
 }
-
 func (s *server) DownloadDb(req *pb.DownloadDbRequest, stream pb.EmcacheService_DownloadDbServer) error {
 	collectionName := req.GetCollectionName()
 	if collectionName == "" {
@@ -52,16 +51,18 @@ func (s *server) DownloadDb(req *pb.DownloadDbRequest, stream pb.EmcacheService_
 
 	dbPath := follower.GetCollectionDBPath(collectionName, s.sqliteDir, currentVersion)
 
-	if _, statErr := os.Stat(dbPath); os.IsNotExist(statErr) {
-		log.Printf("SQLite DB file not found locally for collection '%s' v%d at path: %s", collectionName, currentVersion, dbPath)
-		return status.Errorf(codes.NotFound, "SQLite database for collection %s version %d not found", collectionName, currentVersion)
-	}
-
-	log.Printf("Streaming database version %d for collection '%s' from %s", currentVersion, collectionName, dbPath)
-	file, err := os.Open(dbPath)
+	snapshotPath, cleanupSnapshot, err := snapshot.GetOrGenerateSnapshot(ctx, dbPath)
 	if err != nil {
-		log.Printf("Error opening SQLite DB file %s for streaming: %v", dbPath, err)
-		return status.Errorf(codes.Internal, "Failed to open database file for streaming")
+		log.Printf("Error preparing snapshot for %s (v%d): %v", collectionName, currentVersion, err)
+		return status.Errorf(codes.Internal, "Failed to prepare database snapshot for download")
+	}
+	defer cleanupSnapshot()
+
+	log.Printf("Streaming snapshot version %d for collection '%s' from %s", currentVersion, collectionName, snapshotPath)
+	file, err := os.Open(snapshotPath)
+	if err != nil {
+		log.Printf("Error opening snapshot file %s for streaming: %v", snapshotPath, err)
+		return status.Errorf(codes.Internal, "Failed to open database snapshot for streaming")
 	}
 	defer file.Close()
 
@@ -83,8 +84,8 @@ func (s *server) DownloadDb(req *pb.DownloadDbRequest, stream pb.EmcacheService_
 			break
 		}
 		if err != nil {
-			log.Printf("Error reading from DB file %s: %v", dbPath, err)
-			return status.Errorf(codes.Internal, "Failed to read database file")
+			log.Printf("Error reading from snapshot file %s: %v", snapshotPath, err)
+			return status.Errorf(codes.Internal, "Failed to read database snapshot")
 		}
 	}
 

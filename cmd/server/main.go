@@ -25,6 +25,7 @@ import (
 	"github.com/nrjais/emcache/internal/grpcapi"
 	"github.com/nrjais/emcache/internal/leader"
 	"github.com/nrjais/emcache/internal/migrations"
+	"github.com/nrjais/emcache/internal/snapshot"
 	pb "github.com/nrjais/emcache/pkg/protos"
 )
 
@@ -64,6 +65,8 @@ func main() {
 	startCentralFollower(bgTaskCtx, &wg, pgPool, cfg)
 
 	startCollectionCoordinator(bgTaskCtx, &wg, pgPool, mongoClient, mongoDBName, leaderElector, cfg)
+
+	startSnapshotCleanup(bgTaskCtx, &wg, cfg)
 
 	grpcServer := startGRPCServer(&wg, pgPool, cfg)
 
@@ -137,6 +140,12 @@ func startCollectionCoordinator(ctx context.Context, wg *sync.WaitGroup, pgPool 
 		defer wg.Done()
 		coord.Start(ctx)
 	}()
+}
+
+func startSnapshotCleanup(ctx context.Context, wg *sync.WaitGroup, cfg *config.Config) {
+	snapshotTTL := time.Duration(cfg.SnapshotOptions.TTLSecs) * time.Second
+	wg.Add(1)
+	go snapshot.StartCleanupLoop(ctx, wg, snapshotTTL)
 }
 
 func startGRPCServer(wg *sync.WaitGroup, pgPool *pgxpool.Pool, cfg *config.Config) *grpc.Server {

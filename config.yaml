@@ -35,3 +35,8 @@ follower:
   batch_size: 100
   # How often to clean up old SQLite database files (seconds)
   cleanup_interval_secs: 300
+
+# Optional: Snapshot settings
+snapshot:
+  # How long an unused snapshot file is kept before deletion (seconds)
+  ttl_secs: 3600

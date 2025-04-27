@@ -18,6 +18,7 @@ type Config struct {
 	CoordinatorOptions CoordinatorConfig `mapstructure:"coordinator" validate:"required,dive"`
 	LeaderOptions      LeaderConfig      `mapstructure:"leader" validate:"required,dive"`
 	FollowerOptions    FollowerConfig    `mapstructure:"follower" validate:"required,dive"`
+	SnapshotOptions    SnapshotConfig    `mapstructure:"snapshot" validate:"required,dive"`
 }
 
 type CoordinatorConfig struct {
@@ -35,6 +36,10 @@ type FollowerConfig struct {
 	CleanupIntervalSecs int `mapstructure:"cleanup_interval_secs" validate:"min=1"`
 }
 
+type SnapshotConfig struct {
+	TTLSecs int `mapstructure:"ttl_secs" validate:"min=1"`
+}
+
 func Load() *Config {
 	v := viper.New()
 
@@ -49,6 +54,7 @@ func Load() *Config {
 	v.SetDefault("follower.poll_interval_secs", 2)
 	v.SetDefault("follower.batch_size", 100)
 	v.SetDefault("follower.cleanup_interval_secs", 300)
+	v.SetDefault("snapshot.ttl_secs", 3600)
 
 	v.SetEnvPrefix("EMCACHE")
 	v.AutomaticEnv()
@@ -109,4 +115,5 @@ func logConfig(cfg *Config) {
 	log.Printf(" - Coordinator Options: %+v", cfg.CoordinatorOptions)
 	log.Printf(" - Leader Options: %+v", cfg.LeaderOptions)
 	log.Printf(" - Follower Options: %+v", cfg.FollowerOptions)
+	log.Printf(" - Snapshot Options: %+v", cfg.SnapshotOptions)
 }
