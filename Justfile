@@ -9,3 +9,12 @@ generate:
 		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
 		pkg/protos/emcache.proto
 	go generate ./...
+
+build:
+	go build -o emcache cmd/server/main.go
+
+docker-build:
+	docker build -t emcache .
+
+docker-run: docker-build
+	docker run -v $(pwd)/config.yaml:/etc/emcache/config.yaml emcache
