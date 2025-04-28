@@ -2,7 +2,6 @@ package follower
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -13,9 +12,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/nrjais/emcache/internal/config"
 	"github.com/nrjais/emcache/internal/db"
+	"zombiezen.com/go/sqlite"
+	"zombiezen.com/go/sqlite/sqlitex"
 )
 
 type CentralFollower struct {
@@ -25,7 +25,7 @@ type CentralFollower struct {
 	cleanupInterval   time.Duration
 	batchSize         int
 	globalLastOplogID int64
-	connections       map[string]*sql.DB
+	connections       map[string]*sqlite.Conn
 	connMutex         sync.Mutex
 }
 
@@ -42,7 +42,7 @@ func NewCentralFollower(pgPool *pgxpool.Pool, sqliteBaseDir string, cfg *config.
 		cleanupInterval:   cleanupInterval,
 		batchSize:         batchSize,
 		globalLastOplogID: 0,
-		connections:       make(map[string]*sql.DB),
+		connections:       make(map[string]*sqlite.Conn),
 	}
 	cf.initializeGlobalLastOplogID()
 
@@ -64,15 +64,7 @@ func (cf *CentralFollower) initializeGlobalLastOplogID() {
 	}
 
 	var maxID int64 = 0
-	initCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
 	for _, file := range files {
-		if initCtx.Err() != nil {
-			log.Println("[CentralFollower:Init] Initialization scan timed out.")
-			break
-		}
-
 		if file.IsDir() || !strings.HasSuffix(file.Name(), ".sqlite") {
 			continue
 		}
@@ -87,14 +79,14 @@ func (cf *CentralFollower) initializeGlobalLastOplogID() {
 			continue
 		}
 
-		tempDB, err := openCollectionDB(collectionName, cf.sqliteBaseDir, version)
+		tempConn, err := openCollectionDB(collectionName, cf.sqliteBaseDir, version)
 		if err != nil {
-			log.Printf("[CentralFollower:Init] Failed to open DB %s to read metadata: %v", collectionName, err)
+			log.Printf("[CentralFollower:Init] Failed to open Conn %s to read metadata: %v", collectionName, err)
 			continue
 		}
 
-		lastIdx, err := getLastAppliedOplogIndex(tempDB)
-		tempDB.Close()
+		lastIdx, err := getLastAppliedOplogIndex(tempConn)
+		tempConn.Close()
 
 		if err != nil {
 			log.Printf("[CentralFollower:Init] Failed to read last applied index from %s: %v", collectionName, err)
@@ -142,7 +134,10 @@ func (cf *CentralFollower) runMainLoop(ctx context.Context, wg *sync.WaitGroup) 
 		case <-timer.C:
 			currentLastID := cf.globalLastOplogID
 
-			entries, err := db.GetOplogEntriesGlobal(ctx, cf.pgPool, currentLastID, cf.batchSize)
+			pgCtx, pgCancel := context.WithTimeout(ctx, 15*time.Second)
+			entries, err := db.GetOplogEntriesGlobal(pgCtx, cf.pgPool, currentLastID, cf.batchSize)
+			pgCancel()
+
 			if err != nil {
 				log.Printf("[CentralFollower] Error fetching global oplog entries after ID %d: %v", currentLastID, err)
 				continue
@@ -164,14 +159,14 @@ func (cf *CentralFollower) runMainLoop(ctx context.Context, wg *sync.WaitGroup) 
 					continue
 				}
 
-				dbConn, err := cf.getOrCreateConnection(ctx, entry.Collection, entry.Version)
+				sqliteConn, err := cf.getOrCreateConnection(ctx, entry.Collection, entry.Version)
 				if err != nil {
-					log.Printf("[CentralFollower] CRITICAL: Failed to get/create SQLite DB for %s v%d: %v. Halting batch processing for this cycle.", entry.Collection, entry.Version, err)
+					log.Printf("[CentralFollower] CRITICAL: Failed to get/create SQLite Conn for %s v%d: %v. Halting batch processing for this cycle.", entry.Collection, entry.Version, err)
 					batchFailed = true
 					break
 				}
 
-				err = cf.applySingleEntry(ctx, dbConn, entry)
+				err = cf.applySingleEntry(sqliteConn, entry)
 				if err != nil {
 					log.Printf("[CentralFollower] CRITICAL: Failed to apply oplog entry ID %d to %s: %v. Halting batch processing for this cycle.", entry.ID, entry.Collection, err)
 					batchFailed = true
@@ -224,7 +219,7 @@ func (cf *CentralFollower) runCleanupLoop(ctx context.Context, wg *sync.WaitGrou
 	}
 }
 
-func (cf *CentralFollower) getOrCreateConnection(ctx context.Context, collectionName string, version int) (*sql.DB, error) {
+func (cf *CentralFollower) getOrCreateConnection(ctx context.Context, collectionName string, version int) (*sqlite.Conn, error) {
 	cf.connMutex.Lock()
 	defer cf.connMutex.Unlock()
 
@@ -232,70 +227,55 @@ func (cf *CentralFollower) getOrCreateConnection(ctx context.Context, collection
 	dbPath := GetCollectionDBPath(collectionName, cf.sqliteBaseDir, version)
 
 	if conn, exists := cf.connections[dbKey]; exists {
-		if err := conn.PingContext(ctx); err == nil {
+		err := sqlitex.ExecuteTransient(conn, "SELECT 1;", nil)
+		if err == nil {
 			return conn, nil
 		}
-		log.Printf("[CentralFollower] Stale connection detected for %s. Closing and reopening.", dbKey)
+		log.Printf("[CentralFollower] Stale connection detected for %s (err: %v). Closing and reopening.", dbKey, err)
 		conn.Close()
 		delete(cf.connections, dbKey)
 	}
 
 	log.Printf("[CentralFollower] Opening connection for %s at %s", dbKey, dbPath)
-	sqliteDB, err := openCollectionDB(collectionName, cf.sqliteBaseDir, version)
+	sqliteConn, err := openCollectionDB(collectionName, cf.sqliteBaseDir, version)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open/create db %s: %w", dbPath, err)
+		return nil, fmt.Errorf("failed to open/create conn %s: %w", dbPath, err)
 	}
 
-	reset, err := GetOrResetLocalDBVersion(sqliteDB, version)
+	sqliteConn.SetInterrupt(ctx.Done())
+
+	reset, err := GetOrResetLocalDBVersion(sqliteConn, version)
 	if err != nil {
+		sqliteConn.Close()
 		log.Printf("[CentralFollower] Error getting/resetting internal version for %s: %v", dbPath, err)
 		return nil, fmt.Errorf("failed to get/reset internal version for %s: %w", dbPath, err)
 	}
 	if reset {
-		log.Printf("[CentralFollower] version mismatch in existing file, resetting to %d", version)
+		log.Printf("[CentralFollower] Version mismatch in existing file, resetting to %d for %s", version, dbPath)
 	}
 
-	cf.connections[dbKey] = sqliteDB
-	return sqliteDB, nil
+	cf.connections[dbKey] = sqliteConn
+	return sqliteConn, nil
 }
 
-func (cf *CentralFollower) applySingleEntry(ctx context.Context, dbConn *sql.DB, entry db.OplogEntry) error {
-	tx, err := dbConn.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin sqlite transaction for entry ID %d: %w", entry.ID, err)
-	}
-	var commitErr error
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-			panic(r)
-		} else if commitErr != nil {
-			if rbErr := tx.Rollback(); rbErr != nil {
-				log.Printf("[CentralFollower] Error rolling back transaction for %s after commit error: %v (Original error: %v)", entry.Collection, rbErr, commitErr)
-			}
-		}
-	}()
+func (cf *CentralFollower) applySingleEntry(conn *sqlite.Conn, entry db.OplogEntry) (err error) {
+	defer sqlitex.Save(conn)(&err)
 
-	if err := applyOplogEntry(tx, entry); err != nil {
-		commitErr = fmt.Errorf("failed to apply operation for entry ID %d: %w", entry.ID, err)
-		return commitErr
+	if err = applyOplogEntry(conn, entry); err != nil {
+		return fmt.Errorf("failed to apply operation for entry ID %d: %w", entry.ID, err)
 	}
 
-	if err := setLastAppliedOplogIndex(tx, entry.ID); err != nil {
-		commitErr = fmt.Errorf("failed to set last applied index to %d for entry ID %d: %w", entry.ID, entry.ID, err)
-		return commitErr
-	}
-
-	commitErr = tx.Commit()
-	if commitErr != nil {
-		return fmt.Errorf("failed to commit sqlite transaction for entry ID %d: %w", entry.ID, commitErr)
+	if err = setLastAppliedOplogIndex(conn, entry.ID); err != nil {
+		return fmt.Errorf("failed to set last applied index to %d for entry ID %d: %w", entry.ID, entry.ID, err)
 	}
 
 	return nil
 }
 
 func (cf *CentralFollower) cleanupOldFiles(ctx context.Context) error {
-	currentVersions, err := db.GetAllCurrentCollectionVersions(ctx, cf.pgPool)
+	pgCtx, pgCancel := context.WithTimeout(ctx, 30*time.Second)
+	currentVersions, err := db.GetAllCurrentCollectionVersions(pgCtx, cf.pgPool)
+	pgCancel()
 	if err != nil {
 		return fmt.Errorf("failed to get current collection versions from postgres: %w", err)
 	}

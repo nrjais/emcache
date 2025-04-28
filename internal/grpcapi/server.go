@@ -8,7 +8,6 @@ import (
 	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/nrjais/emcache/internal/db"
 	"github.com/nrjais/emcache/internal/follower"
 	"github.com/nrjais/emcache/internal/snapshot"

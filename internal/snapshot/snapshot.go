@@ -2,14 +2,13 @@ package snapshot
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"sync"
 	"time"
 
-	"github.com/mattn/go-sqlite3"
+	"zombiezen.com/go/sqlite"
 )
 
 type snapshotInfo struct {
@@ -64,79 +63,54 @@ func GetOrGenerateSnapshot(ctx context.Context, dbPath string) (snapshotPath str
 
 	_ = os.Remove(snapshotPath)
 
-	srcDSN := fmt.Sprintf("file:%s?mode=ro&_journal_mode=WAL", dbPath)
-	srcDB, err := sql.Open("sqlite3", srcDSN)
+	srcConn, err := sqlite.OpenConn(dbPath, sqlite.OpenReadOnly, sqlite.OpenWAL)
 	if err != nil {
-		return "", nil, fmt.Errorf("backup: failed to open source db %s: %w", dbPath, err)
-	}
-	defer srcDB.Close()
-	srcDB.SetMaxOpenConns(1)
-
-	dstDSN := fmt.Sprintf("file:%s?_journal_mode=DELETE", snapshotPath)
-	dstDB, err := sql.Open("sqlite3", dstDSN)
-	if err != nil {
-		_ = os.Remove(snapshotPath)
-		return "", nil, fmt.Errorf("backup: failed to create destination db %s: %w", snapshotPath, err)
-	}
-	defer dstDB.Close()
-	dstDB.SetMaxOpenConns(1)
-
-	srcConn, err := srcDB.Conn(ctx)
-	if err != nil {
-		_ = os.Remove(snapshotPath)
-		return "", nil, fmt.Errorf("backup: failed to get source connection: %w", err)
+		return "", nil, fmt.Errorf("backup: failed to open source conn %s: %w", dbPath, err)
 	}
 	defer srcConn.Close()
 
-	dstConn, err := dstDB.Conn(ctx)
+	dstConn, err := sqlite.OpenConn(snapshotPath, sqlite.OpenReadWrite, sqlite.OpenCreate)
 	if err != nil {
 		_ = os.Remove(snapshotPath)
-		return "", nil, fmt.Errorf("backup: failed to get destination connection: %w", err)
+		return "", nil, fmt.Errorf("backup: failed to create destination conn %s: %w", snapshotPath, err)
 	}
 	defer dstConn.Close()
 
+	srcConn.SetInterrupt(ctx.Done())
+	dstConn.SetInterrupt(ctx.Done())
+
 	backupStart := time.Now()
-	err = dstConn.Raw(func(dstDriverConn interface{}) error {
-		dstSQLiteConn, ok := dstDriverConn.(*sqlite3.SQLiteConn)
-		if !ok {
-			return fmt.Errorf("destination connection is not *sqlite3.SQLiteConn (%T)", dstDriverConn)
-		}
 
-		return srcConn.Raw(func(srcDriverConn interface{}) error {
-			srcSQLiteConn, ok := srcDriverConn.(*sqlite3.SQLiteConn)
-			if !ok {
-				return fmt.Errorf("source connection is not *sqlite3.SQLiteConn (%T)", srcDriverConn)
-			}
-
-			log.Printf("[Snapshot] Starting backup process from %s to %s", dbPath, snapshotPath)
-			backup, err := dstSQLiteConn.Backup("main", srcSQLiteConn, "main")
-			if err != nil {
-				return fmt.Errorf("failed to initialize backup: %w", err)
-			}
-
-			done, err := backup.Step(-1)
-			if err != nil {
-				_ = backup.Finish()
-				return fmt.Errorf("backup step failed: %w", err)
-			}
-			if !done {
-				_ = backup.Finish()
-				return fmt.Errorf("backup step completed without finishing (done=%t)", done)
-			}
-
-			err = backup.Finish()
-			if err != nil {
-				return fmt.Errorf("backup finish failed: %w", err)
-			}
-			log.Printf("[Snapshot] Backup process completed successfully.")
-			return nil
-		})
-	})
-
+	backup, err := sqlite.NewBackup(dstConn, "main", srcConn, "main")
 	if err != nil {
 		_ = os.Remove(snapshotPath)
-		return "", nil, fmt.Errorf("sqlite backup process failed: %w", err)
+		return "", nil, fmt.Errorf("backup: failed to initialize: %w", err)
 	}
+
+	var done bool
+	for !done {
+		select {
+		case <-ctx.Done():
+			backup.Close()
+			_ = os.Remove(snapshotPath)
+			return "", nil, fmt.Errorf("backup context cancelled: %w", ctx.Err())
+		default:
+		}
+
+		done, err = backup.Step(-1)
+		if err != nil {
+			backup.Close()
+			_ = os.Remove(snapshotPath)
+			return "", nil, fmt.Errorf("backup step failed: %w", err)
+		}
+	}
+
+	err = backup.Close()
+	if err != nil {
+		_ = os.Remove(snapshotPath)
+		return "", nil, fmt.Errorf("backup finish failed: %w", err)
+	}
+
 	log.Printf("[Snapshot] SQLite backup created successfully in %v", time.Since(backupStart))
 
 	info := &snapshotInfo{

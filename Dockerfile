@@ -2,7 +2,6 @@ FROM golang:1.24-alpine AS builder
 
 RUN apk update && apk upgrade
 RUN apk add --no-cache just sqlite
-RUN apk add --update gcc musl-dev
 
 WORKDIR /app
 
