@@ -1,7 +1,8 @@
 # Example configuration for Emcache
 
 # Required: PostgreSQL connection URL
-postgres_url: "postgres://postgres:password@postgres.emcache.orb.local:5432/postgres?sslmode=disable"
+# Currently locking blocks one connection per collection, so we need to increase the pool size
+postgres_url: "postgres://postgres:password@postgres.emcache.orb.local:5432/postgres?sslmode=disable&pool_max_conns=1000"
 
 # Required: MongoDB connection URL (must include database name)
 mongo_url: "mongodb://mongo.emcache.orb.local:27017/test?directConnection=true"
@@ -18,25 +19,25 @@ log_level: "INFO"
 # Optional: Coordinator operation settings
 coordinator:
   # How often to check for new collections to manage (seconds)
-  collection_refresh_interval_secs: 60
+  collection_refresh_interval_secs: 1
 
 # Optional: Leader operation settings
 leader:
   # How often to save the resume token (seconds)
-  resume_token_update_interval_secs: 10
+  resume_token_update_interval_secs: 1
   # How many documents to fetch at once during initial collection scan
   initial_scan_batch_size: 1000
 
 # Optional: Follower operation settings
 follower:
   # How often the follower checks Postgres for new oplog entries (seconds)
-  poll_interval_secs: 5
+  poll_interval_secs: 1
   # How many oplog entries the follower fetches from Postgres at a time
   batch_size: 100
   # How often to clean up old SQLite database files (seconds)
-  cleanup_interval_secs: 300
+  cleanup_interval_secs: 10
 
 # Optional: Snapshot settings
 snapshot:
   # How long an unused snapshot file is kept before deletion (seconds)
-  ttl_secs: 3600
+  ttl_secs: 300

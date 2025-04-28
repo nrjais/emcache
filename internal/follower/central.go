@@ -134,6 +134,7 @@ func (cf *CentralFollower) runMainLoop(ctx context.Context, wg *sync.WaitGroup) 
 		case <-timer.C:
 			currentLastID := cf.globalLastOplogID
 
+			log.Printf("[CentralFollower] Fetching global oplog entries after ID %d", currentLastID)
 			pgCtx, pgCancel := context.WithTimeout(ctx, 15*time.Second)
 			entries, err := db.GetOplogEntriesGlobal(pgCtx, cf.pgPool, currentLastID, cf.batchSize)
 			pgCancel()

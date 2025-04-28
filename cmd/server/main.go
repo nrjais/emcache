@@ -34,10 +34,6 @@ func main() {
 
 	cfg := config.Load()
 
-	if err := migrations.RunMigrations(cfg.PostgresURL); err != nil {
-		log.Fatalf("Database migration failed: %v", err)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -46,6 +42,10 @@ func main() {
 		log.Fatalf("Database setup failed: %v", err)
 	}
 	defer pgPool.Close()
+
+	if err := migrations.RunMigrations(pgPool); err != nil {
+		log.Fatalf("Database migration failed: %v", err)
+	}
 
 	defer func() {
 		disconnectCtx, disconnectCancel := context.WithTimeout(context.Background(), 10*time.Second)

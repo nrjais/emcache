@@ -1,49 +1,32 @@
 package migrations
 
 import (
-	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
 	"log"
 
 	"github.com/golang-migrate/migrate/v4"
-	"github.com/golang-migrate/migrate/v4/database/postgres"
+	"github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 //go:embed postgres/*.sql
 var MigrationsFS embed.FS
 
-func RunMigrations(databaseURL string) error {
+func RunMigrations(pool *pgxpool.Pool) error {
 	log.Println("Running database migrations from embedded files...")
 
 	sourceInstance, err := iofs.New(MigrationsFS, "postgres")
 	if err != nil {
 		return fmt.Errorf("failed to create iofs source driver: %w", err)
 	}
-	defer func() {
-		if cerr := sourceInstance.Close(); cerr != nil {
-			log.Printf("Warning: error closing migration source instance: %v", cerr)
-		}
-	}()
 
-	migrateDB, err := sql.Open("postgres", databaseURL)
-	if err != nil {
-		return fmt.Errorf("failed to open database connection for migration: %w", err)
-	}
-	defer func() {
-		if cerr := migrateDB.Close(); cerr != nil {
-			log.Printf("Warning: error closing migration db connection: %v", cerr)
-		}
-	}()
-
-	if err = migrateDB.Ping(); err != nil {
-		return fmt.Errorf("failed to ping database for migration: %w", err)
-	}
-
-	dbDriver, err := postgres.WithInstance(migrateDB, &postgres.Config{
-		MigrationsTable: postgres.DefaultMigrationsTable,
+	db := stdlib.OpenDBFromPool(pool)
+	dbDriver, err := pgx.WithInstance(db, &pgx.Config{
+		MigrationsTable: pgx.DefaultMigrationsTable,
 	})
 	if err != nil {
 		return fmt.Errorf("could not create postgres driver instance: %w", err)
