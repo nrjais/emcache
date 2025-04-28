@@ -17,8 +17,7 @@ func GetOplogEntriesMultipleCollections(ctx context.Context, pool *pgxpool.Pool,
         FROM oplog
         WHERE collection = ANY($1) AND id > $2
         ORDER BY id ASC
-        LIMIT $3;
-    `
+        LIMIT $3`
 
 	rows, err := pool.Query(ctx, sql, collections, afterID, limit)
 	if err != nil {

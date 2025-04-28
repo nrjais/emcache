@@ -46,10 +46,9 @@ func openCollectionDB(collectionName string, sqliteBaseDir string, version int) 
         CREATE TABLE IF NOT EXISTS %s (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
-        );
-    `, metadataTableName)
+        )`, metadataTableName)
 
-	err = sqlitex.ExecuteTransient(conn, schemaSQL, nil)
+	err = sqlitex.Execute(conn, schemaSQL, nil)
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to create metadata table in %s: %w", dbPath, err)
@@ -69,7 +68,7 @@ func GetOrResetLocalDBVersion(conn *sqlite.Conn, version int) (bool, error) {
 	var found bool
 	query := fmt.Sprintf("SELECT value FROM %s WHERE key = ?", metadataTableName)
 
-	err := sqlitex.ExecuteTransient(conn, query, &sqlitex.ExecOptions{
+	err := sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
 		Args: []any{dbVersionKey},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			value := stmt.ColumnText(0)
@@ -98,7 +97,7 @@ func GetOrResetLocalDBVersion(conn *sqlite.Conn, version int) (bool, error) {
 
 	if version != storedVersion {
 		log.Printf("Version mismatch in existing file (found %d, expected %d), resetting to %d", storedVersion, version, version)
-		if err := sqlitex.ExecuteTransient(conn, fmt.Sprintf("DELETE FROM %s WHERE key = ?", metadataTableName), &sqlitex.ExecOptions{Args: []any{lastAppliedIdxKey}}); err != nil {
+		if err := sqlitex.Execute(conn, fmt.Sprintf("DELETE FROM %s WHERE key = ?", metadataTableName), &sqlitex.ExecOptions{Args: []any{lastAppliedIdxKey}}); err != nil {
 			log.Printf("Failed to clear last applied index during version reset: %v", err)
 		}
 		return true, setLocalDBVersion(conn, version)
@@ -110,13 +109,12 @@ func GetOrResetLocalDBVersion(conn *sqlite.Conn, version int) (bool, error) {
 func setLocalDBVersion(conn *sqlite.Conn, version int) error {
 	sql := fmt.Sprintf(`
         INSERT INTO %s (key, value) VALUES (?, ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-    `, metadataTableName)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value`, metadataTableName)
 	args := []any{
 		dbVersionKey,
 		fmt.Sprintf("%d", version),
 	}
-	err := sqlitex.ExecuteTransient(conn, sql, &sqlitex.ExecOptions{Args: args})
+	err := sqlitex.Execute(conn, sql, &sqlitex.ExecOptions{Args: args})
 	if err != nil {
 		return fmt.Errorf("failed to set local DB version to %d: %w", version, err)
 	}
@@ -128,7 +126,7 @@ func getLastAppliedOplogIndex(conn *sqlite.Conn) (int64, error) {
 	var found bool
 	query := fmt.Sprintf("SELECT value FROM %s WHERE key = ?", metadataTableName)
 
-	err := sqlitex.ExecuteTransient(conn, query, &sqlitex.ExecOptions{
+	err := sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
 		Args: []any{lastAppliedIdxKey},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			value := stmt.ColumnText(0)
@@ -158,13 +156,12 @@ func getLastAppliedOplogIndex(conn *sqlite.Conn) (int64, error) {
 func setLastAppliedOplogIndex(conn *sqlite.Conn, index int64) error {
 	sql := fmt.Sprintf(`
         INSERT INTO %s (key, value) VALUES (?, ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-    `, metadataTableName)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value`, metadataTableName)
 	args := []any{
 		lastAppliedIdxKey,
 		fmt.Sprintf("%d", index),
 	}
-	err := sqlitex.ExecuteTransient(conn, sql, &sqlitex.ExecOptions{Args: args})
+	err := sqlitex.Execute(conn, sql, &sqlitex.ExecOptions{Args: args})
 	if err != nil {
 		return fmt.Errorf("failed to set last applied oplog index to %d: %w", index, err)
 	}
@@ -176,20 +173,19 @@ func applyOplogEntry(conn *sqlite.Conn, entry db.OplogEntry) error {
 		sql := fmt.Sprintf(`
             INSERT INTO %s (_id, source)
             VALUES (?, ?)
-            ON CONFLICT(_id) DO UPDATE SET source = excluded.source;
-        `, dataTableName)
+            ON CONFLICT(_id) DO UPDATE SET source = excluded.source`, dataTableName)
 		args := []any{
 			entry.DocID,
 			entry.Doc,
 		}
-		err := sqlitex.ExecuteTransient(conn, sql, &sqlitex.ExecOptions{Args: args})
+		err := sqlitex.Execute(conn, sql, &sqlitex.ExecOptions{Args: args})
 		if err != nil {
 			return fmt.Errorf("failed to execute upsert for doc %s: %w", entry.DocID, err)
 		}
 	} else if entry.Operation == "DELETE" {
 		sql := fmt.Sprintf("DELETE FROM %s WHERE _id = ?", dataTableName)
 		args := []any{entry.DocID}
-		err := sqlitex.ExecuteTransient(conn, sql, &sqlitex.ExecOptions{Args: args})
+		err := sqlitex.Execute(conn, sql, &sqlitex.ExecOptions{Args: args})
 		if err != nil {
 			return fmt.Errorf("failed to execute delete for doc %s: %w", entry.DocID, err)
 		}
@@ -204,7 +200,6 @@ func ensureCollectionTable(conn *sqlite.Conn) error {
 		CREATE TABLE IF NOT EXISTS %s (
 			_id TEXT PRIMARY KEY,
 			source BLOB
-		);
-	`, dataTableName)
-	return sqlitex.ExecuteTransient(conn, tableSQL, nil)
+		)`, dataTableName)
+	return sqlitex.Execute(conn, tableSQL, nil)
 }

@@ -73,8 +73,7 @@ func UpsertResumeToken(ctx context.Context, pool *pgxpool.Pool, collection strin
         INSERT INTO resume_tokens (collection, token, updated_at)
         VALUES ($1, $2, NOW())
         ON CONFLICT (collection)
-        DO UPDATE SET token = EXCLUDED.token, updated_at = NOW();
-    `
+        DO UPDATE SET token = EXCLUDED.token, updated_at = NOW()`
 	_, err := pool.Exec(ctx, sql, collection, token)
 	if err != nil {
 		return fmt.Errorf("failed to upsert resume token for collection %s: %w", collection, err)
@@ -96,8 +95,7 @@ func InsertOplogEntry(ctx context.Context, pool *pgxpool.Pool, entry OplogEntry)
 	sql := `
         INSERT INTO oplog (operation, doc_id, created_at, collection, doc, version)
         VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id;
-    `
+        RETURNING id`
 	var id int64
 	err := pool.QueryRow(ctx, sql,
 		entry.Operation, entry.DocID, entry.CreatedAt, entry.Collection, entry.Doc, entry.Version,
@@ -115,8 +113,7 @@ func GetOplogEntriesGlobal(ctx context.Context, pool *pgxpool.Pool, afterID int6
         FROM oplog
         WHERE id > $1
         ORDER BY id ASC
-        LIMIT $2;
-    `
+        LIMIT $2`
 	rows, err := pool.Query(ctx, sql, afterID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query global oplog entries after id %d: %w", afterID, err)
@@ -150,7 +147,7 @@ func GetOplogEntriesGlobal(ctx context.Context, pool *pgxpool.Pool, afterID int6
 
 func GetCurrentCollectionVersion(ctx context.Context, pool *pgxpool.Pool, collectionName string) (int, error) {
 	var version int
-	sql := `SELECT current_version FROM replicated_collections WHERE collection_name = $1;`
+	sql := `SELECT current_version FROM replicated_collections WHERE collection_name = $1`
 	err := pool.QueryRow(ctx, sql, collectionName).Scan(&version)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -167,8 +164,7 @@ func IncrementCollectionVersion(ctx context.Context, pool *pgxpool.Pool, collect
         UPDATE replicated_collections
         SET current_version = current_version + 1
         WHERE collection_name = $1
-        RETURNING current_version;
-    `
+        RETURNING current_version`
 	err := pool.QueryRow(ctx, sql, collectionName).Scan(&newVersion)
 	if err != nil {
 		return 0, fmt.Errorf("failed to increment version for collection '%s': %w", collectionName, err)
@@ -178,7 +174,7 @@ func IncrementCollectionVersion(ctx context.Context, pool *pgxpool.Pool, collect
 }
 
 func ListReplicatedCollections(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
-	sql := `SELECT collection_name FROM replicated_collections ORDER BY collection_name;`
+	sql := `SELECT collection_name FROM replicated_collections ORDER BY collection_name`
 	rows, err := pool.Query(ctx, sql)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query replicated collections: %w", err)
@@ -205,7 +201,7 @@ type CollectionVersion struct {
 }
 
 func GetAllCurrentCollectionVersions(ctx context.Context, pool *pgxpool.Pool) ([]CollectionVersion, error) {
-	sql := `SELECT collection_name, current_version FROM replicated_collections;`
+	sql := `SELECT collection_name, current_version FROM replicated_collections`
 	rows, err := pool.Query(ctx, sql)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query all current collection versions: %w", err)
@@ -227,7 +223,7 @@ func GetAllCurrentCollectionVersions(ctx context.Context, pool *pgxpool.Pool) ([
 }
 
 func AddReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collectionName string) error {
-	sql := `INSERT INTO replicated_collections (collection_name) VALUES ($1) ON CONFLICT DO NOTHING;`
+	sql := `INSERT INTO replicated_collections (collection_name) VALUES ($1) ON CONFLICT DO NOTHING`
 	_, err := pool.Exec(ctx, sql, collectionName)
 	if err != nil {
 		return fmt.Errorf("failed to add replicated collection '%s': %w", collectionName, err)
@@ -237,7 +233,7 @@ func AddReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collection
 }
 
 func RemoveReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collectionName string) error {
-	sql := `DELETE FROM replicated_collections WHERE collection_name = $1;`
+	sql := `DELETE FROM replicated_collections WHERE collection_name = $1`
 	cmdTag, err := pool.Exec(ctx, sql, collectionName)
 	if err != nil {
 		return fmt.Errorf("failed to remove replicated collection '%s': %w", collectionName, err)

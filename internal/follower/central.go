@@ -227,7 +227,7 @@ func (cf *CentralFollower) getOrCreateConnection(ctx context.Context, collection
 	dbPath := GetCollectionDBPath(collectionName, cf.sqliteBaseDir, version)
 
 	if conn, exists := cf.connections[dbKey]; exists {
-		err := sqlitex.ExecuteTransient(conn, "SELECT 1;", nil)
+		err := sqlitex.Execute(conn, "SELECT 1;", nil)
 		if err == nil {
 			return conn, nil
 		}
