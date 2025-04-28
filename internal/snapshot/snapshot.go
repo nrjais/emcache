@@ -87,8 +87,8 @@ func GetOrGenerateSnapshot(ctx context.Context, dbPath string) (snapshotPath str
 		return "", nil, fmt.Errorf("backup: failed to initialize: %w", err)
 	}
 
-	var done bool
-	for !done {
+	more := true
+	for more {
 		select {
 		case <-ctx.Done():
 			backup.Close()
@@ -97,7 +97,7 @@ func GetOrGenerateSnapshot(ctx context.Context, dbPath string) (snapshotPath str
 		default:
 		}
 
-		done, err = backup.Step(-1)
+		more, err = backup.Step(-1)
 		if err != nil {
 			backup.Close()
 			_ = os.Remove(snapshotPath)
