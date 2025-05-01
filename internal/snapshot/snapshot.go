@@ -177,12 +177,11 @@ func cleanupStaleSnapshots(ttl time.Duration, snapshotDir string) {
 			continue
 		}
 
+		log.Printf("[Snapshot] Deleting stale snapshot file %s", file.Name())
 		snapshotsToDelete = append(snapshotsToDelete, file.Name())
 	}
 
 	for _, path := range snapshotsToDelete {
-		log.Printf("[Snapshot] Deleting stale snapshot %s (created: %v, refCount: %d)", path, snapshotManager.snapshots[path].creationTime, snapshotManager.snapshots[path].refCount)
-
 		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
 			log.Printf("[Snapshot] Error deleting snapshot file %s: %v", path, rmErr)
 		} else {

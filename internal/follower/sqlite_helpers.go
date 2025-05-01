@@ -25,7 +25,7 @@ func GetCollectionDBPath(collectionName string, sqliteBaseDir string, version in
 	return filepath.Join(sqliteBaseDir, fileName)
 }
 
-func openCollectionDB(collectionName string, sqliteBaseDir string, version int) (*sqlite.Conn, error) {
+func openCollectionDB(collectionName string, sqliteBaseDir string, dbPath string, version int) (*sqlite.Conn, error) {
 	if sqliteBaseDir == "" {
 		return nil, fmt.Errorf("sqlite base directory cannot be empty")
 	}
@@ -35,23 +35,15 @@ func openCollectionDB(collectionName string, sqliteBaseDir string, version int) 
 	if err := os.MkdirAll(sqliteBaseDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create directory for SQLite DBs at %s: %w", sqliteBaseDir, err)
 	}
-	dbPath := GetCollectionDBPath(collectionName, sqliteBaseDir, version)
 
-	conn, err := sqlite.OpenConn(dbPath, sqlite.OpenReadWrite, sqlite.OpenCreate, sqlite.OpenWAL, sqlite.OpenURI)
+	conn, err := sqlite.OpenConn(dbPath, sqlite.OpenReadWrite, sqlite.OpenCreate, sqlite.OpenWAL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite conn for collection %s at %s: %w", collectionName, dbPath, err)
 	}
 
-	schemaSQL := fmt.Sprintf(`
-        CREATE TABLE IF NOT EXISTS %s (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )`, metadataTableName)
-
-	err = sqlitex.Execute(conn, schemaSQL, nil)
-	if err != nil {
+	if err := initMetaTable(conn); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("failed to create metadata table in %s: %w", dbPath, err)
+		return nil, fmt.Errorf("failed to initialize metadata table in %s: %w", dbPath, err)
 	}
 
 	if err := ensureCollectionTable(conn); err != nil {
@@ -121,34 +113,23 @@ func setLocalDBVersion(conn *sqlite.Conn, version int) error {
 	return nil
 }
 
+func initMetaTable(conn *sqlite.Conn) error {
+	return sqlitex.Execute(conn, "CREATE TABLE IF NOT EXISTS _emcache_meta (key TEXT PRIMARY KEY, value ANY) STRICT", nil)
+}
+
 func getLastAppliedOplogIndex(conn *sqlite.Conn) (int64, error) {
 	var idx int64
-	var found bool
 	query := fmt.Sprintf("SELECT value FROM %s WHERE key = ?", metadataTableName)
-
 	err := sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
 		Args: []any{lastAppliedIdxKey},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
-			value := stmt.ColumnText(0)
-			if value == "" {
-				return nil
-			}
-			var scanErr error
-			idx, scanErr = strconv.ParseInt(value, 10, 64)
-			if scanErr != nil {
-				log.Printf("Failed to parse stored oplog index '%s': %v. Treating as 0.", value, scanErr)
-				return nil
-			}
-			found = true
+			idx = stmt.ColumnInt64(0)
 			return nil
 		},
 	})
 
 	if err != nil {
 		return 0, fmt.Errorf("failed to query last applied oplog index: %w", err)
-	}
-	if !found {
-		return 0, nil
 	}
 	return idx, nil
 }

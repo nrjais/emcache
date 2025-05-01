@@ -62,7 +62,10 @@ func main() {
 	var wg sync.WaitGroup
 	bgTaskCtx, bgTaskCancel := context.WithCancel(ctx)
 
-	startCentralFollower(bgTaskCtx, &wg, pgPool, cfg)
+	err = startCentralFollower(bgTaskCtx, &wg, pgPool, cfg)
+	if err != nil {
+		log.Fatalf("Failed to start central follower: %v", err)
+	}
 
 	startCollectionCoordinator(bgTaskCtx, &wg, pgPool, mongoClient, mongoDBName, leaderElector, cfg)
 
@@ -126,10 +129,14 @@ func setupLeaderElector(pgPool *pgxpool.Pool) (*leader.LeaderElector, string) {
 	return leaderElector, instanceID
 }
 
-func startCentralFollower(ctx context.Context, wg *sync.WaitGroup, pgPool *pgxpool.Pool, cfg *config.Config) {
-	centralFollower := follower.NewCentralFollower(pgPool, cfg.SQLiteDir, cfg)
+func startCentralFollower(ctx context.Context, wg *sync.WaitGroup, pgPool *pgxpool.Pool, cfg *config.Config) error {
+	centralFollower, err := follower.NewMainFollower(pgPool, cfg.SQLiteDir, cfg)
+	if err != nil {
+		return fmt.Errorf("failed to create central follower: %w", err)
+	}
 	wg.Add(1)
 	go centralFollower.Start(ctx, wg)
+	return nil
 }
 
 func startCollectionCoordinator(ctx context.Context, wg *sync.WaitGroup, pgPool *pgxpool.Pool, mongoClient *mongo.Client, mongoDBName string, leaderElector *leader.LeaderElector, cfg *config.Config) {

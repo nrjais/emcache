@@ -40,4 +40,4 @@ follower:
 # Optional: Snapshot settings
 snapshot:
   # How long an unused snapshot file is kept before deletion (seconds)
-  ttl_secs: 300
+  ttl_secs: 10
