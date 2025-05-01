@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: postgres
+    healthcheck:
+      test: pg_isready -U postgres -d postgres
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    ports:
+      - "5432:5432"
+  mongo:
+    image: mongo:8
+    ports:
+      - "27017:27017"
+    extra_hosts:
+      - "docker.host.internal:host-gateway"
+    command: ["--replSet", "rs0", "--bind_ip_all", "--port", "27017"]
+    healthcheck:
+      test: echo "try { rs.status() } catch (err) { rs.initiate({_id:'rs0',members:[{_id:0,host:'docker.host.internal:27017'}]}) }" | mongosh --port 27017 --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+  emcache:
+    build:
+      context: ../
+      dockerfile: Dockerfile
+    ports:
+      - "50051:50051"
+    volumes:
+      - ./config.yaml:/etc/emcache/config.yaml
+    depends_on:
+      - postgres
+      - mongo

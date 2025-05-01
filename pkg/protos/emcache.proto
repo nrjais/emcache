@@ -13,6 +13,8 @@ service EmcacheService {
   rpc GetOplogEntries (GetOplogEntriesRequest) returns (GetOplogEntriesResponse);
 
   rpc AddCollection (AddCollectionRequest) returns (AddCollectionResponse);
+
+  rpc RemoveCollection (RemoveCollectionRequest) returns (RemoveCollectionResponse);
 }
 
 message DownloadDbRequest {
@@ -55,4 +57,11 @@ message AddCollectionRequest {
 }
 
 message AddCollectionResponse {
+}
+
+message RemoveCollectionRequest {
+  string collection_name = 1;
+}
+
+message RemoveCollectionResponse {
 }

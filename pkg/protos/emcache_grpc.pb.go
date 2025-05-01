@@ -19,9 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	EmcacheService_DownloadDb_FullMethodName      = "/emcache.EmcacheService/DownloadDb"
-	EmcacheService_GetOplogEntries_FullMethodName = "/emcache.EmcacheService/GetOplogEntries"
-	EmcacheService_AddCollection_FullMethodName   = "/emcache.EmcacheService/AddCollection"
+	EmcacheService_DownloadDb_FullMethodName       = "/emcache.EmcacheService/DownloadDb"
+	EmcacheService_GetOplogEntries_FullMethodName  = "/emcache.EmcacheService/GetOplogEntries"
+	EmcacheService_AddCollection_FullMethodName    = "/emcache.EmcacheService/AddCollection"
+	EmcacheService_RemoveCollection_FullMethodName = "/emcache.EmcacheService/RemoveCollection"
 )
 
 // EmcacheServiceClient is the client API for EmcacheService service.
@@ -31,6 +32,7 @@ type EmcacheServiceClient interface {
 	DownloadDb(ctx context.Context, in *DownloadDbRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DownloadDbResponse], error)
 	GetOplogEntries(ctx context.Context, in *GetOplogEntriesRequest, opts ...grpc.CallOption) (*GetOplogEntriesResponse, error)
 	AddCollection(ctx context.Context, in *AddCollectionRequest, opts ...grpc.CallOption) (*AddCollectionResponse, error)
+	RemoveCollection(ctx context.Context, in *RemoveCollectionRequest, opts ...grpc.CallOption) (*RemoveCollectionResponse, error)
 }
 
 type emcacheServiceClient struct {
@@ -80,6 +82,16 @@ func (c *emcacheServiceClient) AddCollection(ctx context.Context, in *AddCollect
 	return out, nil
 }
 
+func (c *emcacheServiceClient) RemoveCollection(ctx context.Context, in *RemoveCollectionRequest, opts ...grpc.CallOption) (*RemoveCollectionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveCollectionResponse)
+	err := c.cc.Invoke(ctx, EmcacheService_RemoveCollection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EmcacheServiceServer is the server API for EmcacheService service.
 // All implementations must embed UnimplementedEmcacheServiceServer
 // for forward compatibility.
@@ -87,6 +99,7 @@ type EmcacheServiceServer interface {
 	DownloadDb(*DownloadDbRequest, grpc.ServerStreamingServer[DownloadDbResponse]) error
 	GetOplogEntries(context.Context, *GetOplogEntriesRequest) (*GetOplogEntriesResponse, error)
 	AddCollection(context.Context, *AddCollectionRequest) (*AddCollectionResponse, error)
+	RemoveCollection(context.Context, *RemoveCollectionRequest) (*RemoveCollectionResponse, error)
 	mustEmbedUnimplementedEmcacheServiceServer()
 }
 
@@ -105,6 +118,9 @@ func (UnimplementedEmcacheServiceServer) GetOplogEntries(context.Context, *GetOp
 }
 func (UnimplementedEmcacheServiceServer) AddCollection(context.Context, *AddCollectionRequest) (*AddCollectionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddCollection not implemented")
+}
+func (UnimplementedEmcacheServiceServer) RemoveCollection(context.Context, *RemoveCollectionRequest) (*RemoveCollectionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveCollection not implemented")
 }
 func (UnimplementedEmcacheServiceServer) mustEmbedUnimplementedEmcacheServiceServer() {}
 func (UnimplementedEmcacheServiceServer) testEmbeddedByValue()                        {}
@@ -174,6 +190,24 @@ func _EmcacheService_AddCollection_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EmcacheService_RemoveCollection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveCollectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EmcacheServiceServer).RemoveCollection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EmcacheService_RemoveCollection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EmcacheServiceServer).RemoveCollection(ctx, req.(*RemoveCollectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EmcacheService_ServiceDesc is the grpc.ServiceDesc for EmcacheService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -188,6 +222,10 @@ var EmcacheService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AddCollection",
 			Handler:    _EmcacheService_AddCollection_Handler,
+		},
+		{
+			MethodName: "RemoveCollection",
+			Handler:    _EmcacheService_RemoveCollection_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

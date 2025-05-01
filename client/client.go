@@ -94,3 +94,12 @@ func (c *Client) AddCollection(ctx context.Context, collectionName string) (*pb.
 	}
 	return resp, nil
 }
+
+func (c *Client) RemoveCollection(ctx context.Context, collectionName string) (*pb.RemoveCollectionResponse, error) {
+	req := &pb.RemoveCollectionRequest{CollectionName: collectionName}
+	resp, err := c.client.RemoveCollection(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}

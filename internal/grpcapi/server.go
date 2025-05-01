@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nrjais/emcache/internal/db"
@@ -100,9 +101,7 @@ func (s *server) GetOplogEntries(ctx context.Context, req *pb.GetOplogEntriesReq
 	if len(collectionNames) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "At least one collection name must be provided")
 	}
-	if afterIndex < 0 {
-		return nil, status.Error(codes.InvalidArgument, "after_index cannot be negative")
-	}
+
 	if limit <= 0 {
 		limit = 100
 		log.Printf("gRPC GetOplogEntries: Invalid or missing limit, defaulting to %d", limit)
@@ -148,6 +147,27 @@ func (s *server) AddCollection(ctx context.Context, req *pb.AddCollectionRequest
 	}
 
 	return &pb.AddCollectionResponse{}, nil
+}
+
+func (s *server) RemoveCollection(ctx context.Context, req *pb.RemoveCollectionRequest) (*pb.RemoveCollectionResponse, error) {
+	collectionName := req.GetCollectionName()
+	if collectionName == "" {
+		return nil, status.Error(codes.InvalidArgument, "Collection name cannot be empty")
+	}
+
+	log.Printf("gRPC RemoveCollection request for collection: %s", collectionName)
+
+	if err := db.RemoveReplicatedCollection(ctx, s.pgPool, collectionName); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			log.Printf("Collection '%s' not found for removal.", collectionName)
+			return nil, status.Errorf(codes.NotFound, "Collection %s not found for removal", collectionName)
+		}
+		log.Printf("Error removing replicated collection '%s' from database: %v", collectionName, err)
+		return nil, status.Error(codes.Internal, "Failed to remove collection from replication list")
+	}
+
+	log.Printf("Successfully removed collection '%s' from replication.", collectionName)
+	return &pb.RemoveCollectionResponse{}, nil
 }
 
 func convertDbOplogToProto(entry db.OplogEntry) (*pb.OplogEntry, error) {
