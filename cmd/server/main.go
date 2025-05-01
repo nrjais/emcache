@@ -145,7 +145,7 @@ func startCollectionCoordinator(ctx context.Context, wg *sync.WaitGroup, pgPool 
 func startSnapshotCleanup(ctx context.Context, wg *sync.WaitGroup, cfg *config.Config) {
 	snapshotTTL := time.Duration(cfg.SnapshotOptions.TTLSecs) * time.Second
 	wg.Add(1)
-	go snapshot.StartCleanupLoop(ctx, wg, snapshotTTL)
+	go snapshot.StartCleanupLoop(ctx, wg, snapshotTTL, cfg.SQLiteDir)
 }
 
 func startGRPCServer(wg *sync.WaitGroup, pgPool *pgxpool.Pool, cfg *config.Config) *grpc.Server {

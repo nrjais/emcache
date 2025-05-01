@@ -171,9 +171,9 @@ func setLastAppliedOplogIndex(conn *sqlite.Conn, index int64) error {
 func applyOplogEntry(conn *sqlite.Conn, entry db.OplogEntry) error {
 	if entry.Operation == "UPSERT" {
 		sql := fmt.Sprintf(`
-            INSERT INTO %s (_id, source)
+            INSERT INTO %s (id, source)
             VALUES (?, ?)
-            ON CONFLICT(_id) DO UPDATE SET source = excluded.source`, dataTableName)
+            ON CONFLICT(id) DO UPDATE SET source = excluded.source`, dataTableName)
 		args := []any{
 			entry.DocID,
 			entry.Doc,
@@ -183,7 +183,7 @@ func applyOplogEntry(conn *sqlite.Conn, entry db.OplogEntry) error {
 			return fmt.Errorf("failed to execute upsert for doc %s: %w", entry.DocID, err)
 		}
 	} else if entry.Operation == "DELETE" {
-		sql := fmt.Sprintf("DELETE FROM %s WHERE _id = ?", dataTableName)
+		sql := fmt.Sprintf("DELETE FROM %s WHERE id = ?", dataTableName)
 		args := []any{entry.DocID}
 		err := sqlitex.Execute(conn, sql, &sqlitex.ExecOptions{Args: args})
 		if err != nil {
@@ -198,7 +198,7 @@ func applyOplogEntry(conn *sqlite.Conn, entry db.OplogEntry) error {
 func ensureCollectionTable(conn *sqlite.Conn) error {
 	tableSQL := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
-			_id TEXT PRIMARY KEY,
+			id TEXT PRIMARY KEY,
 			source BLOB
 		)`, dataTableName)
 	return sqlitex.Execute(conn, tableSQL, nil)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -123,7 +124,7 @@ func GetOrGenerateSnapshot(ctx context.Context, dbPath string) (snapshotPath str
 	return snapshotPath, cleanupFunc(info), nil
 }
 
-func StartCleanupLoop(ctx context.Context, wg *sync.WaitGroup, ttl time.Duration) {
+func StartCleanupLoop(ctx context.Context, wg *sync.WaitGroup, ttl time.Duration, snapshotDir string) {
 	defer wg.Done()
 	log.Printf("[Snapshot] Starting cleanup loop with TTL: %v", ttl)
 
@@ -135,15 +136,15 @@ func StartCleanupLoop(ctx context.Context, wg *sync.WaitGroup, ttl time.Duration
 		select {
 		case <-ctx.Done():
 			log.Println("[Snapshot] Cleanup loop stopping due to context cancellation.")
-			cleanupStaleSnapshots(ttl)
+			cleanupStaleSnapshots(ttl, snapshotDir)
 			return
 		case <-ticker.C:
-			cleanupStaleSnapshots(ttl)
+			cleanupStaleSnapshots(ttl, snapshotDir)
 		}
 	}
 }
 
-func cleanupStaleSnapshots(ttl time.Duration) {
+func cleanupStaleSnapshots(ttl time.Duration, snapshotDir string) {
 	log.Println("[Snapshot] Running periodic cleanup check...")
 	now := time.Now()
 	deletedCount := 0
@@ -151,17 +152,44 @@ func cleanupStaleSnapshots(ttl time.Duration) {
 	snapshotManager.mu.Lock()
 	defer snapshotManager.mu.Unlock()
 
+	toKeep := make(map[string]struct{}, len(snapshotManager.snapshots))
+
 	for path, info := range snapshotManager.snapshots {
-		if info.refCount <= 0 && now.Sub(info.creationTime) > ttl {
-			log.Printf("[Snapshot] Deleting stale snapshot %s (created: %v, refCount: %d)", path, info.creationTime, info.refCount)
-			delete(snapshotManager.snapshots, path)
-			if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
-				log.Printf("[Snapshot] Error deleting snapshot file %s: %v", path, rmErr)
-			} else {
-				deletedCount++
-			}
+		if info.refCount > 0 && now.Sub(info.creationTime) < ttl {
+			toKeep[path] = struct{}{}
 		}
 	}
+
+	snapshotsToDelete := make([]string, 0, len(snapshotManager.snapshots))
+	files, err := os.ReadDir(snapshotDir)
+	if err != nil {
+		log.Printf("[Snapshot] Error reading snapshot directory: %v", err)
+	}
+
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(file.Name(), ".snapshot") {
+			continue
+		}
+		if _, ok := toKeep[file.Name()]; ok {
+			continue
+		}
+
+		snapshotsToDelete = append(snapshotsToDelete, file.Name())
+	}
+
+	for _, path := range snapshotsToDelete {
+		log.Printf("[Snapshot] Deleting stale snapshot %s (created: %v, refCount: %d)", path, snapshotManager.snapshots[path].creationTime, snapshotManager.snapshots[path].refCount)
+
+		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+			log.Printf("[Snapshot] Error deleting snapshot file %s: %v", path, rmErr)
+		} else {
+			deletedCount++
+		}
+	}
+
 	if deletedCount > 0 {
 		log.Printf("[Snapshot] Deleted %d stale snapshot(s).", deletedCount)
 	}

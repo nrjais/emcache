@@ -12,7 +12,7 @@ CREATE INDEX idx_resume_tokens_updated_at ON resume_tokens(updated_at);
 CREATE TABLE oplog (
     id          BIGSERIAL PRIMARY KEY,     -- Auto-incrementing ID
     operation   VARCHAR(10) NOT NULL,    -- 'UPSERT' or 'DELETE'
-    doc_id      VARCHAR(255) NOT NULL,   -- Document identifier (_id)
+    doc_id      VARCHAR(255) NOT NULL,   -- Document identifier (id)
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- Timestamp of oplog entry creation
     collection  VARCHAR(255) NOT NULL,   -- MongoDB collection name
     doc         JSONB NULL,              -- Full document data for UPSERTs (NULL for DELETE)

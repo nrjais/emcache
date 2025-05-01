@@ -19,6 +19,7 @@ import (
 	"zombiezen.com/go/sqlite/sqlitex"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -33,6 +34,8 @@ const (
 	emcacheAddr       = "localhost:50051"
 	dockerComposeFile = "./docker-compose.yml"
 )
+
+var uniqueId = primitive.NewObjectID().Hex()
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
@@ -85,7 +88,7 @@ type TestDoc struct {
 // setupSyncedCollection creates a unique collection, adds initial data,
 // calls AddCollection, downloads the initial DB, and returns the collection name,
 // the initial docs, the path to the local SQLite DB, and the initial DB version.
-func setupSyncedCollection(t *testing.T, ctx context.Context, numInitialDocs int, collectionName string) (string, []any, string, int32) {
+func setupSyncedCollection(t *testing.T, ctx context.Context, numInitialDocs int, collectionName string) ([]any, string, int32) {
 	t.Helper()
 
 	dbName := "test"
@@ -103,12 +106,14 @@ func setupSyncedCollection(t *testing.T, ctx context.Context, numInitialDocs int
 
 	// Get mongo collection handle
 	collection := mongoClient.Database(dbName).Collection(collectionName)
-	// t.Cleanup(func() {
-	// 	log.Printf("[%s] Dropping collection: %s", t.Name(), collectionName)
-	// 	if err := collection.Drop(context.Background()); err != nil {
-	// 		log.Printf("[%s] Failed to drop collection %s: %v", t.Name(), collectionName, err)
-	// 	}
-	// })
+	t.Cleanup(func() {
+		_, err := emcacheClient.RemoveCollection(context.Background(), collectionName)
+		require.NoError(t, err, "Failed to remove collection from Emcache")
+		log.Printf("[%s] Dropping collection: %s", t.Name(), collectionName)
+		if err := collection.Drop(context.Background()); err != nil {
+			log.Printf("[%s] Failed to drop collection %s: %v", t.Name(), collectionName, err)
+		}
+	})
 
 	// Insert initial documents if any
 	if len(initialDocs) > 0 {
@@ -121,7 +126,7 @@ func setupSyncedCollection(t *testing.T, ctx context.Context, numInitialDocs int
 	log.Printf("[%s] Calling AddCollection...", t.Name())
 	_, err := emcacheClient.AddCollection(ctx, collectionName)
 	require.NoError(t, err, "Failed to call AddCollection")
-	time.Sleep(5 * time.Second) // Allow time for processing
+	time.Sleep(10 * time.Second) // Allow time for processing
 
 	// Download the initial DB
 	log.Printf("[%s] Calling DownloadDb...", t.Name())
@@ -138,7 +143,7 @@ func setupSyncedCollection(t *testing.T, ctx context.Context, numInitialDocs int
 	require.NoError(t, err, "Failed to write downloaded DB to temp file")
 	log.Printf("[%s] Saved initial DB to: %s", t.Name(), dbPath)
 
-	return collectionName, initialDocs, dbPath, dbVersion
+	return initialDocs, dbPath, dbVersion
 }
 
 // applyOplogEvents applies received oplog events to the local SQLite database.
@@ -166,8 +171,8 @@ func applyOplogEvents(t *testing.T, conn *sqlite.Conn, collectionName string, en
 				continue
 			}
 
-			// Assuming _emcache_data table structure (_id TEXT PK, source BLOB)
-			stmt := fmt.Sprintf("INSERT INTO %s (_id, source) VALUES (?, ?) ON CONFLICT(_id) DO UPDATE SET source = excluded.source", collectionName) // Use constant table name
+			// Assuming _emcache_data table structure (id TEXT PK, source BLOB)
+			stmt := "INSERT INTO _emcache_data (id, source) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET source = excluded.source" // Use constant table name
 
 			// Convert structpb to JSON bytes for the source BLOB column
 			jsonData, jsonErr := entry.Data.MarshalJSON()
@@ -187,7 +192,7 @@ func applyOplogEvents(t *testing.T, conn *sqlite.Conn, collectionName string, en
 			}
 
 		case pb.OplogEntry_DELETE:
-			stmt := fmt.Sprintf("DELETE FROM %s WHERE _id = ?", collectionName) // Use constant table name
+			stmt := "DELETE FROM _emcache_data WHERE id = ?"
 			err = sqlitex.Execute(conn, stmt, &sqlitex.ExecOptions{
 				Args: []any{entry.Id},
 			})
@@ -202,7 +207,6 @@ func applyOplogEvents(t *testing.T, conn *sqlite.Conn, collectionName string, en
 		lastAppliedIndex = entry.Index
 	}
 
-	// Commit is handled by the defer sqlitex.Save if err remains nil
 	if err == nil {
 		log.Printf("[%s] Successfully applied %d events up to index %d", t.Name(), len(entries), lastAppliedIndex)
 	}
@@ -211,17 +215,14 @@ func applyOplogEvents(t *testing.T, conn *sqlite.Conn, collectionName string, en
 }
 
 // verifyDocsInSQLite queries the SQLite DB and verifies the presence and content of expected documents.
-func verifyDocsInSQLite(t *testing.T, dbPath string, collectionName string, expectedDocs map[string]TestDoc) {
+func verifyDocsInSQLite(t *testing.T, conn *sqlite.Conn, collectionName string, expectedDocs map[string]TestDoc) {
 	t.Helper()
 
-	conn, err := sqlite.OpenConn(dbPath, sqlite.OpenReadOnly, sqlite.OpenWAL)
-	require.NoError(t, err, "Failed to open SQLite DB for verification")
-	defer conn.Close()
-
-	query := fmt.Sprintf("SELECT _id, source FROM %s", "_emcache_data") // Query the standard table
+	// Use the actual collection name in the query now
+	query := "SELECT id, source FROM _emcache_data"
 	foundDocs := make(map[string]TestDoc)
 
-	err = sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
+	err := sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			id := stmt.ColumnText(0)
 			// Get length of the blob first
@@ -246,10 +247,10 @@ func verifyDocsInSQLite(t *testing.T, dbPath string, collectionName string, expe
 				return nil // Treat unmarshal error as a verification failure later
 			}
 
-			// Ensure the _id from the JSON matches the key column
+			// Ensure the id from the JSON matches the key column
 			if doc.ID != id {
-				log.Printf("[%s] WARN: Mismatch between _id column ('%s') and JSON _id field ('%s')", t.Name(), id, doc.ID)
-				// Use the column _id as the key for the map
+				log.Printf("[%s] WARN: Mismatch between id column ('%s') and JSON id field ('%s')", t.Name(), id, doc.ID)
+				// Use the column id as the key for the map
 			}
 			foundDocs[id] = doc
 			return nil
@@ -257,15 +258,21 @@ func verifyDocsInSQLite(t *testing.T, dbPath string, collectionName string, expe
 	})
 	require.NoError(t, err, "Failed to execute query for verification")
 
-	require.Equal(t, len(expectedDocs), len(foundDocs), "Number of documents in SQLite DB does not match expected count")
+	// Detailed comparison
+	require.Equal(t, len(expectedDocs), len(foundDocs), "Number of documents in SQLite DB (%d) does not match expected count (%d)", len(foundDocs), len(expectedDocs))
 
 	for id, expected := range expectedDocs {
 		found, ok := foundDocs[id]
 		require.True(t, ok, "Expected document with ID %s not found in SQLite DB", id)
-		require.Equal(t, expected.Name, found.Name, "Name mismatch for doc ID %s", id)
-		require.Equal(t, expected.Age, found.Age, "Age mismatch for doc ID %s", id)
+		require.Equal(t, expected.Name, found.Name, "Name mismatch for doc ID %s. Expected: %s, Found: %s", id, expected.Name, found.Name)
+		require.Equal(t, expected.Age, found.Age, "Age mismatch for doc ID %s. Expected: %d, Found: %d", id, expected.Age, found.Age)
 	}
-	log.Printf("[%s] Successfully verified %d documents in SQLite DB %s", t.Name(), len(expectedDocs), collectionName)
+
+	if len(expectedDocs) > 0 {
+		log.Printf("[%s] Successfully verified %d documents in SQLite DB %s", t.Name(), len(expectedDocs), collectionName)
+	} else {
+		log.Printf("[%s] Successfully verified SQLite DB %s is empty as expected", t.Name(), collectionName)
+	}
 }
 
 // --- Test Cases ---
@@ -276,8 +283,9 @@ func TestInitialSync(t *testing.T) {
 	defer cancel()
 
 	// 1. Setup collection and initial data using helper
+	collectionName := "test_initial_sync_" + uniqueId
 	numInitial := 2
-	collectionName, initialDocsSlice, dbPath, _ := setupSyncedCollection(t, ctx, numInitial, "test_initial_sync")
+	initialDocsSlice, dbPath, _ := setupSyncedCollection(t, ctx, numInitial, collectionName)
 
 	// Convert initial docs slice to map for easier verification
 	initialDocsMap := make(map[string]TestDoc)
@@ -286,8 +294,12 @@ func TestInitialSync(t *testing.T) {
 		initialDocsMap[d.ID] = d
 	}
 
+	sqlDB, err := sqlite.OpenConn(dbPath, sqlite.OpenReadWrite, sqlite.OpenWAL) // Open for writing
+	require.NoError(t, err, "Failed to open SQLite DB for oplog application")
+	defer sqlDB.Close()
+
 	// 2. Verify initial data in the downloaded SQLite DB
-	verifyDocsInSQLite(t, dbPath, collectionName, initialDocsMap)
+	verifyDocsInSQLite(t, sqlDB, collectionName, initialDocsMap)
 
 	log.Printf("[%s] Initial sync verification successful!", t.Name())
 }
@@ -297,57 +309,59 @@ func TestInsertSync(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second) // Increased timeout
 	defer cancel()
 
-	// 1. Setup: Create collection, add initial doc, get local DB path
+	// 1. Setup: Create collection, add initial doc, get local DB path and initial version
 	numInitial := 1
-	collectionName, initialDocsSlice, dbPath, _ := setupSyncedCollection(t, ctx, numInitial, "test_insert_sync")
+	collectionName := "test_insert_sync_" + uniqueId
+	initialDocsSlice, dbPath, initialDbVersion := setupSyncedCollection(t, ctx, numInitial, collectionName)
+	require.GreaterOrEqual(t, initialDbVersion, int32(0), "Initial DB version should be valid")
 
-	// Keep track of expected docs in the local DB
+	// Keep track of expected docs in the local DB (start with initial docs)
 	expectedDocs := make(map[string]TestDoc)
 	for _, doc := range initialDocsSlice {
 		d := doc.(TestDoc)
 		expectedDocs[d.ID] = d
 	}
 
-	// Open the local SQLite DB for applying oplogs
-	sqlDB, err := sqlite.OpenConn(dbPath, sqlite.OpenReadOnly, sqlite.OpenWAL)
-	require.NoError(t, err, "Failed to open SQLite DB for oplog application")
-	defer sqlDB.Close()
-
-	var lastAppliedIndex int64 = -1 // Start assuming no oplogs applied yet
-
-	// 2. Action: Insert new documents into MongoDB
-	newDocs := []interface{}{
+	// 2. Actions: Insert new documents into MongoDB
+	newDocs := []any{
 		TestDoc{ID: uuid.NewString(), Name: "Charlie", Age: 35},
 		TestDoc{ID: uuid.NewString(), Name: "David", Age: 40},
 	}
 
 	log.Printf("[%s] Inserting %d new documents into MongoDB...", t.Name(), len(newDocs))
-	collection := mongoClient.Database("testdb").Collection(collectionName)
-	_, err = collection.InsertMany(ctx, newDocs)
+	collection := mongoClient.Database("test").Collection(collectionName) // Use correct DB name
+	_, err := collection.InsertMany(ctx, newDocs)
 	require.NoError(t, err, "Failed to insert new documents into MongoDB")
 
-	// Add new docs to expected state
+	// Add new docs to expected state *before* fetching oplogs
 	for _, doc := range newDocs {
 		d := doc.(TestDoc)
 		expectedDocs[d.ID] = d
 	}
 
-	// 3. Fetch Oplog Events (allow some time for events to generate)
-	time.Sleep(3 * time.Second)
-	log.Printf("[%s] Getting oplog entries after index %d...", t.Name(), lastAppliedIndex)
-	// Correctly call GetOplogEntries with individual arguments
-	limit := int32(100)
-	oplogResp, err := emcacheClient.GetOplogEntries(ctx, []string{collectionName}, lastAppliedIndex, limit)
+	// 3. Wait for oplog events to propagate
+	log.Printf("[%s] Waiting for oplog propagation...", t.Name())
+	time.Sleep(5 * time.Second) // Adjust delay as needed
+
+	// 4. Fetch Oplog Events SINCE the initial download
+	log.Printf("[%s] Getting oplog entries after index %d...", t.Name(), initialDbVersion)
+	limit := int32(100) // Fetch a reasonable limit
+	oplogResp, err := emcacheClient.GetOplogEntries(ctx, []string{collectionName}, int64(initialDbVersion), limit)
 	require.NoError(t, err, "Failed to get oplog entries")
 	log.Printf("[%s] Received %d oplog entries.", t.Name(), len(oplogResp.Entries))
 
-	// 4. Apply Oplog events to local DB
-	lastAppliedIndex = applyOplogEvents(t, sqlDB, collectionName, oplogResp.Entries)
-	require.GreaterOrEqual(t, lastAppliedIndex, int64(0), "Expected oplog events to be applied")
+	// 5. Apply Oplog events to local DB
+	// Open the local SQLite DB for writing
+	sqlDB, err := sqlite.OpenConn(dbPath, sqlite.OpenReadWrite, sqlite.OpenWAL) // Remove OpenReadOnly flag
+	require.NoError(t, err, "Failed to open SQLite DB for oplog application")
+	defer sqlDB.Close()
 
-	// 5. Verify local DB has the inserted documents (along with initial ones)
+	applyOplogEvents(t, sqlDB, collectionName, oplogResp.Entries)
+	// We don't strictly need the lastAppliedIndex here if we verify the final state
+
+	// 6. Verify final state of local DB
 	log.Printf("[%s] Verifying all documents in SQLite DB...", t.Name())
-	verifyDocsInSQLite(t, dbPath, collectionName, expectedDocs)
+	verifyDocsInSQLite(t, sqlDB, collectionName, expectedDocs)
 
 	log.Printf("[%s] Insert sync verification successful!", t.Name())
 }
@@ -357,9 +371,11 @@ func TestUpdateSync(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
-	// 1. Setup: Create collection, add initial docs, get local DB path
+	// 1. Setup: Create collection, add initial docs, get local DB path and initial version
 	numInitial := 2
-	collectionName, initialDocsSlice, dbPath, _ := setupSyncedCollection(t, ctx, numInitial, "test_update_sync")
+	collectionName := "test_update_sync_" + uniqueId
+	initialDocsSlice, dbPath, initialDbVersion := setupSyncedCollection(t, ctx, numInitial, collectionName)
+	require.GreaterOrEqual(t, initialDbVersion, int32(0), "Initial DB version should be valid")
 
 	// Keep track of expected docs in the local DB
 	expectedDocs := make(map[string]TestDoc)
@@ -373,58 +389,171 @@ func TestUpdateSync(t *testing.T) {
 	}
 	require.NotEmpty(t, docToUpdate.ID, "Should have selected a document to update")
 
-	// Open the local SQLite DB
-	sqlDB, err := sqlite.OpenConn(dbPath, sqlite.OpenReadOnly, sqlite.OpenWAL)
-	require.NoError(t, err, "Failed to open SQLite DB")
-	defer sqlDB.Close()
-
-	var lastAppliedIndex int64 = -1
-
 	// 2. Action: Update an existing document in MongoDB
 	updatedName := "Updated " + docToUpdate.Name
 	updatedAge := docToUpdate.Age + 10
 
 	log.Printf("[%s] Updating document ID %s in MongoDB...", t.Name(), docToUpdate.ID)
-	collection := mongoClient.Database("testdb").Collection(collectionName)
+	collection := mongoClient.Database("test").Collection(collectionName) // Use correct DB name
 	filter := bson.M{"_id": docToUpdate.ID}
 	update := bson.M{"$set": bson.M{"name": updatedName, "age": updatedAge}}
-	_, err = collection.UpdateOne(ctx, filter, update)
+	_, err := collection.UpdateOne(ctx, filter, update)
 	require.NoError(t, err, "Failed to update document in MongoDB")
 
-	// Update the expected state
+	// Update the expected state *before* fetching oplogs
 	expectedDocs[docToUpdate.ID] = TestDoc{ID: docToUpdate.ID, Name: updatedName, Age: updatedAge}
 
-	// 3. Fetch Oplog Events
-	time.Sleep(3 * time.Second) // Allow time for event generation
-	log.Printf("[%s] Getting oplog entries after index %d...", t.Name(), lastAppliedIndex)
+	// 3. Wait for oplog events to propagate
+	log.Printf("[%s] Waiting for oplog propagation...", t.Name())
+	time.Sleep(5 * time.Second) // Adjust delay as needed
+
+	// 4. Fetch Oplog Events SINCE the initial download
+	log.Printf("[%s] Getting oplog entries after index %d...", t.Name(), initialDbVersion)
 	limit := int32(100)
-	oplogResp, err := emcacheClient.GetOplogEntries(ctx, []string{collectionName}, lastAppliedIndex, limit)
+	oplogResp, err := emcacheClient.GetOplogEntries(ctx, []string{collectionName}, int64(initialDbVersion), limit)
 	require.NoError(t, err, "Failed to get oplog entries")
 	log.Printf("[%s] Received %d oplog entries.", t.Name(), len(oplogResp.Entries))
 
-	// 4. Apply Oplog events to local DB
-	lastAppliedIndex = applyOplogEvents(t, sqlDB, collectionName, oplogResp.Entries)
-	require.GreaterOrEqual(t, lastAppliedIndex, int64(0), "Expected oplog events to be applied")
+	// 5. Apply Oplog events to local DB
+	sqlDB, err := sqlite.OpenConn(dbPath, sqlite.OpenReadWrite, sqlite.OpenWAL) // Open for writing
+	require.NoError(t, err, "Failed to open SQLite DB for oplog application")
+	defer sqlDB.Close()
 
-	// 5. Verify local DB reflects the updates
+	applyOplogEvents(t, sqlDB, collectionName, oplogResp.Entries)
+
+	// 6. Verify final state of local DB
 	log.Printf("[%s] Verifying updated documents in SQLite DB...", t.Name())
-	verifyDocsInSQLite(t, dbPath, collectionName, expectedDocs)
+	verifyDocsInSQLite(t, sqlDB, collectionName, expectedDocs)
 
 	log.Printf("[%s] Update sync verification successful!", t.Name())
 }
 
 func TestDeleteSync(t *testing.T) {
 	t.Parallel()
-	// TODO: Setup sync for a collection with initial data
-	// TODO: Delete documents from mongo
-	// TODO: Get and apply all oplog to the db
-	// TODO: Verify documents are removed from local db
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	// 1. Setup: Create collection with initial data, get local DB path and version
+	numInitial := 3
+	collectionName := "test_delete_sync_" + uniqueId
+	initialDocsSlice, dbPath, initialDbVersion := setupSyncedCollection(t, ctx, numInitial, collectionName)
+	require.GreaterOrEqual(t, initialDbVersion, int32(0), "Initial DB version should be valid")
+
+	// Keep track of expected docs (start with all initial docs)
+	expectedDocs := make(map[string]TestDoc)
+	var docsToDelete []TestDoc // Track docs to delete
+	for i, doc := range initialDocsSlice {
+		d := doc.(TestDoc)
+		expectedDocs[d.ID] = d
+		if i < 2 { // Select first 2 docs for deletion
+			docsToDelete = append(docsToDelete, d)
+		}
+	}
+	require.Len(t, docsToDelete, 2, "Should have selected documents to delete")
+
+	// 2. Actions: Delete documents from MongoDB
+	collection := mongoClient.Database("test").Collection(collectionName)
+	for _, doc := range docsToDelete {
+		log.Printf("[%s] Deleting document ID %s from MongoDB...", t.Name(), doc.ID)
+		filter := bson.M{"_id": doc.ID}
+		_, err := collection.DeleteOne(ctx, filter)
+		require.NoError(t, err, "Failed to delete document ID %s from MongoDB", doc.ID)
+
+		// Update expected state: remove deleted doc
+		delete(expectedDocs, doc.ID)
+	}
+
+	// 3. Wait for oplog propagation
+	log.Printf("[%s] Waiting for oplog propagation...", t.Name())
+	time.Sleep(5 * time.Second)
+
+	// 4. Fetch Oplog Events SINCE initial download
+	log.Printf("[%s] Getting oplog entries after index %d...", t.Name(), initialDbVersion)
+	limit := int32(100)
+	oplogResp, err := emcacheClient.GetOplogEntries(ctx, []string{collectionName}, int64(initialDbVersion), limit)
+	require.NoError(t, err, "Failed to get oplog entries")
+	log.Printf("[%s] Received %d oplog entries.", t.Name(), len(oplogResp.Entries))
+
+	// 5. Apply Oplog events to local DB
+	sqlDB, err := sqlite.OpenConn(dbPath, sqlite.OpenReadWrite, sqlite.OpenWAL) // Open for writing
+	require.NoError(t, err, "Failed to open SQLite DB for oplog application")
+	defer sqlDB.Close()
+
+	applyOplogEvents(t, sqlDB, collectionName, oplogResp.Entries)
+
+	// 6. Verify final state of local DB (deleted docs should be gone)
+	log.Printf("[%s] Verifying documents after deletion in SQLite DB...", t.Name())
+	verifyDocsInSQLite(t, sqlDB, collectionName, expectedDocs) // expectedDocs now only contains the non-deleted ones
+
+	log.Printf("[%s] Delete sync verification successful!", t.Name())
 }
 
 func TestUpsertSync(t *testing.T) {
 	t.Parallel()
-	// TODO: Setup sync for a collection with initial data
-	// TODO: Perform upsert operations (mix of inserts and updates) in mongo
-	// TODO: Get and apply all oplog to the db
-	// TODO: Verify local db reflects the upserts
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	// 1. Setup: Create collection with initial data, get local DB path and version
+	numInitial := 2
+	collectionName := "test_upsert_sync_" + uniqueId
+	initialDocsSlice, dbPath, initialDbVersion := setupSyncedCollection(t, ctx, numInitial, collectionName)
+	require.GreaterOrEqual(t, initialDbVersion, int32(0), "Initial DB version should be valid")
+
+	// Keep track of expected docs
+	expectedDocs := make(map[string]TestDoc)
+	var docToUpdate TestDoc
+	for i, doc := range initialDocsSlice {
+		d := doc.(TestDoc)
+		expectedDocs[d.ID] = d
+		if i == 0 {
+			docToUpdate = d // Select the first doc for an update via upsert
+		}
+	}
+
+	// 2. Actions: Perform upsert operations (one update, one insert)
+	collection := mongoClient.Database("test").Collection(collectionName)
+	upsertOpts := options.Replace().SetUpsert(true)
+
+	// Upsert 1: Update existing document
+	updatedName := "Upserted " + docToUpdate.Name
+	updatedAge := docToUpdate.Age + 5
+	updatedDoc := TestDoc{ID: docToUpdate.ID, Name: updatedName, Age: updatedAge}
+	filterUpdate := bson.M{"_id": docToUpdate.ID}
+	log.Printf("[%s] Upserting (update) document ID %s in MongoDB...", t.Name(), docToUpdate.ID)
+	_, err := collection.ReplaceOne(ctx, filterUpdate, updatedDoc, upsertOpts)
+	require.NoError(t, err, "Failed to upsert (update) document ID %s", docToUpdate.ID)
+	expectedDocs[docToUpdate.ID] = updatedDoc // Update expected state
+
+	// Upsert 2: Insert new document
+	newDocID := uuid.NewString()
+	newDoc := TestDoc{ID: newDocID, Name: "New Upserted Doc", Age: 55}
+	filterInsert := bson.M{"_id": newDocID}
+	log.Printf("[%s] Upserting (insert) document ID %s in MongoDB...", t.Name(), newDocID)
+	_, err = collection.ReplaceOne(ctx, filterInsert, newDoc, upsertOpts)
+	require.NoError(t, err, "Failed to upsert (insert) document ID %s", newDocID)
+	expectedDocs[newDocID] = newDoc // Add new doc to expected state
+
+	// 3. Wait for oplog propagation
+	log.Printf("[%s] Waiting for oplog propagation...", t.Name())
+	time.Sleep(5 * time.Second)
+
+	// 4. Fetch Oplog Events SINCE initial download
+	log.Printf("[%s] Getting oplog entries after index %d...", t.Name(), initialDbVersion)
+	limit := int32(100)
+	oplogResp, err := emcacheClient.GetOplogEntries(ctx, []string{collectionName}, int64(initialDbVersion), limit)
+	require.NoError(t, err, "Failed to get oplog entries")
+	log.Printf("[%s] Received %d oplog entries.", t.Name(), len(oplogResp.Entries))
+
+	// 5. Apply Oplog events to local DB
+	sqlDB, err := sqlite.OpenConn(dbPath, sqlite.OpenReadWrite, sqlite.OpenWAL) // Open for writing
+	require.NoError(t, err, "Failed to open SQLite DB for oplog application")
+	defer sqlDB.Close()
+
+	applyOplogEvents(t, sqlDB, collectionName, oplogResp.Entries)
+
+	// 6. Verify final state of local DB
+	log.Printf("[%s] Verifying documents after upserts in SQLite DB...", t.Name())
+	verifyDocsInSQLite(t, sqlDB, collectionName, expectedDocs)
+
+	log.Printf("[%s] Upsert sync verification successful!", t.Name())
 }
