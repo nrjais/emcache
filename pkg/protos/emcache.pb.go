@@ -23,6 +23,64 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type DataType int32
+
+const (
+	DataType_ANY     DataType = 0
+	DataType_JSONB   DataType = 1
+	DataType_BOOL    DataType = 2
+	DataType_NUMBER  DataType = 3
+	DataType_INTEGER DataType = 4
+	DataType_TEXT    DataType = 5
+)
+
+// Enum value maps for DataType.
+var (
+	DataType_name = map[int32]string{
+		0: "ANY",
+		1: "JSONB",
+		2: "BOOL",
+		3: "NUMBER",
+		4: "INTEGER",
+		5: "TEXT",
+	}
+	DataType_value = map[string]int32{
+		"ANY":     0,
+		"JSONB":   1,
+		"BOOL":    2,
+		"NUMBER":  3,
+		"INTEGER": 4,
+		"TEXT":    5,
+	}
+)
+
+func (x DataType) Enum() *DataType {
+	p := new(DataType)
+	*p = x
+	return p
+}
+
+func (x DataType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (DataType) Descriptor() protoreflect.EnumDescriptor {
+	return file_pkg_protos_emcache_proto_enumTypes[0].Descriptor()
+}
+
+func (DataType) Type() protoreflect.EnumType {
+	return &file_pkg_protos_emcache_proto_enumTypes[0]
+}
+
+func (x DataType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use DataType.Descriptor instead.
+func (DataType) EnumDescriptor() ([]byte, []int) {
+	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{0}
+}
+
 type OplogEntry_OperationType int32
 
 const (
@@ -56,11 +114,11 @@ func (x OplogEntry_OperationType) String() string {
 }
 
 func (OplogEntry_OperationType) Descriptor() protoreflect.EnumDescriptor {
-	return file_pkg_protos_emcache_proto_enumTypes[0].Descriptor()
+	return file_pkg_protos_emcache_proto_enumTypes[1].Descriptor()
 }
 
 func (OplogEntry_OperationType) Type() protoreflect.EnumType {
-	return &file_pkg_protos_emcache_proto_enumTypes[0]
+	return &file_pkg_protos_emcache_proto_enumTypes[1]
 }
 
 func (x OplogEntry_OperationType) Number() protoreflect.EnumNumber {
@@ -69,7 +127,163 @@ func (x OplogEntry_OperationType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use OplogEntry_OperationType.Descriptor instead.
 func (OplogEntry_OperationType) EnumDescriptor() ([]byte, []int) {
-	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{4, 0}
+	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{7, 0}
+}
+
+type Column struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Type          DataType               `protobuf:"varint,2,opt,name=type,proto3,enum=emcache.DataType" json:"type,omitempty"`
+	Path          string                 `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Column) Reset() {
+	*x = Column{}
+	mi := &file_pkg_protos_emcache_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Column) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Column) ProtoMessage() {}
+
+func (x *Column) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_protos_emcache_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Column.ProtoReflect.Descriptor instead.
+func (*Column) Descriptor() ([]byte, []int) {
+	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *Column) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Column) GetType() DataType {
+	if x != nil {
+		return x.Type
+	}
+	return DataType_ANY
+}
+
+func (x *Column) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+type Index struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Columns       []string               `protobuf:"bytes,1,rep,name=columns,proto3" json:"columns,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Index) Reset() {
+	*x = Index{}
+	mi := &file_pkg_protos_emcache_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Index) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Index) ProtoMessage() {}
+
+func (x *Index) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_protos_emcache_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Index.ProtoReflect.Descriptor instead.
+func (*Index) Descriptor() ([]byte, []int) {
+	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *Index) GetColumns() []string {
+	if x != nil {
+		return x.Columns
+	}
+	return nil
+}
+
+type Shape struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Columns       []*Column              `protobuf:"bytes,2,rep,name=columns,proto3" json:"columns,omitempty"`
+	Indexes       []*Index               `protobuf:"bytes,3,rep,name=indexes,proto3" json:"indexes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Shape) Reset() {
+	*x = Shape{}
+	mi := &file_pkg_protos_emcache_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Shape) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Shape) ProtoMessage() {}
+
+func (x *Shape) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_protos_emcache_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Shape.ProtoReflect.Descriptor instead.
+func (*Shape) Descriptor() ([]byte, []int) {
+	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *Shape) GetColumns() []*Column {
+	if x != nil {
+		return x.Columns
+	}
+	return nil
+}
+
+func (x *Shape) GetIndexes() []*Index {
+	if x != nil {
+		return x.Indexes
+	}
+	return nil
 }
 
 type DownloadDbRequest struct {
@@ -81,7 +295,7 @@ type DownloadDbRequest struct {
 
 func (x *DownloadDbRequest) Reset() {
 	*x = DownloadDbRequest{}
-	mi := &file_pkg_protos_emcache_proto_msgTypes[0]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -93,7 +307,7 @@ func (x *DownloadDbRequest) String() string {
 func (*DownloadDbRequest) ProtoMessage() {}
 
 func (x *DownloadDbRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protos_emcache_proto_msgTypes[0]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -106,7 +320,7 @@ func (x *DownloadDbRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadDbRequest.ProtoReflect.Descriptor instead.
 func (*DownloadDbRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{0}
+	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *DownloadDbRequest) GetCollectionName() string {
@@ -126,7 +340,7 @@ type DownloadDbResponse struct {
 
 func (x *DownloadDbResponse) Reset() {
 	*x = DownloadDbResponse{}
-	mi := &file_pkg_protos_emcache_proto_msgTypes[1]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -138,7 +352,7 @@ func (x *DownloadDbResponse) String() string {
 func (*DownloadDbResponse) ProtoMessage() {}
 
 func (x *DownloadDbResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protos_emcache_proto_msgTypes[1]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -151,7 +365,7 @@ func (x *DownloadDbResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadDbResponse.ProtoReflect.Descriptor instead.
 func (*DownloadDbResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{1}
+	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *DownloadDbResponse) GetVersion() int32 {
@@ -179,7 +393,7 @@ type GetOplogEntriesRequest struct {
 
 func (x *GetOplogEntriesRequest) Reset() {
 	*x = GetOplogEntriesRequest{}
-	mi := &file_pkg_protos_emcache_proto_msgTypes[2]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -191,7 +405,7 @@ func (x *GetOplogEntriesRequest) String() string {
 func (*GetOplogEntriesRequest) ProtoMessage() {}
 
 func (x *GetOplogEntriesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protos_emcache_proto_msgTypes[2]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -204,7 +418,7 @@ func (x *GetOplogEntriesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOplogEntriesRequest.ProtoReflect.Descriptor instead.
 func (*GetOplogEntriesRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{2}
+	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GetOplogEntriesRequest) GetCollectionNames() []string {
@@ -237,7 +451,7 @@ type GetOplogEntriesResponse struct {
 
 func (x *GetOplogEntriesResponse) Reset() {
 	*x = GetOplogEntriesResponse{}
-	mi := &file_pkg_protos_emcache_proto_msgTypes[3]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -249,7 +463,7 @@ func (x *GetOplogEntriesResponse) String() string {
 func (*GetOplogEntriesResponse) ProtoMessage() {}
 
 func (x *GetOplogEntriesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protos_emcache_proto_msgTypes[3]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -262,7 +476,7 @@ func (x *GetOplogEntriesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOplogEntriesResponse.ProtoReflect.Descriptor instead.
 func (*GetOplogEntriesResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{3}
+	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GetOplogEntriesResponse) GetEntries() []*OplogEntry {
@@ -287,7 +501,7 @@ type OplogEntry struct {
 
 func (x *OplogEntry) Reset() {
 	*x = OplogEntry{}
-	mi := &file_pkg_protos_emcache_proto_msgTypes[4]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -299,7 +513,7 @@ func (x *OplogEntry) String() string {
 func (*OplogEntry) ProtoMessage() {}
 
 func (x *OplogEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protos_emcache_proto_msgTypes[4]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -312,7 +526,7 @@ func (x *OplogEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OplogEntry.ProtoReflect.Descriptor instead.
 func (*OplogEntry) Descriptor() ([]byte, []int) {
-	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{4}
+	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *OplogEntry) GetIndex() int64 {
@@ -367,13 +581,14 @@ func (x *OplogEntry) GetVersion() int32 {
 type AddCollectionRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	CollectionName string                 `protobuf:"bytes,1,opt,name=collection_name,json=collectionName,proto3" json:"collection_name,omitempty"`
+	Shape          *Shape                 `protobuf:"bytes,2,opt,name=shape,proto3" json:"shape,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
 
 func (x *AddCollectionRequest) Reset() {
 	*x = AddCollectionRequest{}
-	mi := &file_pkg_protos_emcache_proto_msgTypes[5]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -385,7 +600,7 @@ func (x *AddCollectionRequest) String() string {
 func (*AddCollectionRequest) ProtoMessage() {}
 
 func (x *AddCollectionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protos_emcache_proto_msgTypes[5]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -398,7 +613,7 @@ func (x *AddCollectionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddCollectionRequest.ProtoReflect.Descriptor instead.
 func (*AddCollectionRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{5}
+	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AddCollectionRequest) GetCollectionName() string {
@@ -406,6 +621,13 @@ func (x *AddCollectionRequest) GetCollectionName() string {
 		return x.CollectionName
 	}
 	return ""
+}
+
+func (x *AddCollectionRequest) GetShape() *Shape {
+	if x != nil {
+		return x.Shape
+	}
+	return nil
 }
 
 type AddCollectionResponse struct {
@@ -416,7 +638,7 @@ type AddCollectionResponse struct {
 
 func (x *AddCollectionResponse) Reset() {
 	*x = AddCollectionResponse{}
-	mi := &file_pkg_protos_emcache_proto_msgTypes[6]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -428,7 +650,7 @@ func (x *AddCollectionResponse) String() string {
 func (*AddCollectionResponse) ProtoMessage() {}
 
 func (x *AddCollectionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protos_emcache_proto_msgTypes[6]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -441,7 +663,7 @@ func (x *AddCollectionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddCollectionResponse.ProtoReflect.Descriptor instead.
 func (*AddCollectionResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{6}
+	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{9}
 }
 
 type RemoveCollectionRequest struct {
@@ -453,7 +675,7 @@ type RemoveCollectionRequest struct {
 
 func (x *RemoveCollectionRequest) Reset() {
 	*x = RemoveCollectionRequest{}
-	mi := &file_pkg_protos_emcache_proto_msgTypes[7]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -465,7 +687,7 @@ func (x *RemoveCollectionRequest) String() string {
 func (*RemoveCollectionRequest) ProtoMessage() {}
 
 func (x *RemoveCollectionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protos_emcache_proto_msgTypes[7]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -478,7 +700,7 @@ func (x *RemoveCollectionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveCollectionRequest.ProtoReflect.Descriptor instead.
 func (*RemoveCollectionRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{7}
+	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RemoveCollectionRequest) GetCollectionName() string {
@@ -496,7 +718,7 @@ type RemoveCollectionResponse struct {
 
 func (x *RemoveCollectionResponse) Reset() {
 	*x = RemoveCollectionResponse{}
-	mi := &file_pkg_protos_emcache_proto_msgTypes[8]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -508,7 +730,7 @@ func (x *RemoveCollectionResponse) String() string {
 func (*RemoveCollectionResponse) ProtoMessage() {}
 
 func (x *RemoveCollectionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_protos_emcache_proto_msgTypes[8]
+	mi := &file_pkg_protos_emcache_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -521,14 +743,23 @@ func (x *RemoveCollectionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveCollectionResponse.ProtoReflect.Descriptor instead.
 func (*RemoveCollectionResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{8}
+	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{11}
 }
 
 var File_pkg_protos_emcache_proto protoreflect.FileDescriptor
 
 const file_pkg_protos_emcache_proto_rawDesc = "" +
 	"\n" +
-	"\x18pkg/protos/emcache.proto\x12\aemcache\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1cgoogle/protobuf/struct.proto\"<\n" +
+	"\x18pkg/protos/emcache.proto\x12\aemcache\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1cgoogle/protobuf/struct.proto\"W\n" +
+	"\x06Column\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12%\n" +
+	"\x04type\x18\x02 \x01(\x0e2\x11.emcache.DataTypeR\x04type\x12\x12\n" +
+	"\x04path\x18\x03 \x01(\tR\x04path\"!\n" +
+	"\x05Index\x12\x18\n" +
+	"\acolumns\x18\x01 \x03(\tR\acolumns\"\\\n" +
+	"\x05Shape\x12)\n" +
+	"\acolumns\x18\x02 \x03(\v2\x0f.emcache.ColumnR\acolumns\x12(\n" +
+	"\aindexes\x18\x03 \x03(\v2\x0e.emcache.IndexR\aindexes\"<\n" +
 	"\x11DownloadDbRequest\x12'\n" +
 	"\x0fcollection_name\x18\x01 \x01(\tR\x0ecollectionName\"D\n" +
 	"\x12DownloadDbResponse\x12\x18\n" +
@@ -557,13 +788,22 @@ const file_pkg_protos_emcache_proto_rawDesc = "" +
 	"\n" +
 	"\x06UPSERT\x10\x01\x12\n" +
 	"\n" +
-	"\x06DELETE\x10\x02\"?\n" +
+	"\x06DELETE\x10\x02\"e\n" +
 	"\x14AddCollectionRequest\x12'\n" +
-	"\x0fcollection_name\x18\x01 \x01(\tR\x0ecollectionName\"\x17\n" +
+	"\x0fcollection_name\x18\x01 \x01(\tR\x0ecollectionName\x12$\n" +
+	"\x05shape\x18\x02 \x01(\v2\x0e.emcache.ShapeR\x05shape\"\x17\n" +
 	"\x15AddCollectionResponse\"B\n" +
 	"\x17RemoveCollectionRequest\x12'\n" +
 	"\x0fcollection_name\x18\x01 \x01(\tR\x0ecollectionName\"\x1a\n" +
-	"\x18RemoveCollectionResponse2\xd8\x02\n" +
+	"\x18RemoveCollectionResponse*K\n" +
+	"\bDataType\x12\a\n" +
+	"\x03ANY\x10\x00\x12\t\n" +
+	"\x05JSONB\x10\x01\x12\b\n" +
+	"\x04BOOL\x10\x02\x12\n" +
+	"\n" +
+	"\x06NUMBER\x10\x03\x12\v\n" +
+	"\aINTEGER\x10\x04\x12\b\n" +
+	"\x04TEXT\x10\x052\xd8\x02\n" +
 	"\x0eEmcacheService\x12G\n" +
 	"\n" +
 	"DownloadDb\x12\x1a.emcache.DownloadDbRequest\x1a\x1b.emcache.DownloadDbResponse0\x01\x12T\n" +
@@ -583,40 +823,48 @@ func file_pkg_protos_emcache_proto_rawDescGZIP() []byte {
 	return file_pkg_protos_emcache_proto_rawDescData
 }
 
-var file_pkg_protos_emcache_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_pkg_protos_emcache_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_pkg_protos_emcache_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_pkg_protos_emcache_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_pkg_protos_emcache_proto_goTypes = []any{
-	(OplogEntry_OperationType)(0),    // 0: emcache.OplogEntry.OperationType
-	(*DownloadDbRequest)(nil),        // 1: emcache.DownloadDbRequest
-	(*DownloadDbResponse)(nil),       // 2: emcache.DownloadDbResponse
-	(*GetOplogEntriesRequest)(nil),   // 3: emcache.GetOplogEntriesRequest
-	(*GetOplogEntriesResponse)(nil),  // 4: emcache.GetOplogEntriesResponse
-	(*OplogEntry)(nil),               // 5: emcache.OplogEntry
-	(*AddCollectionRequest)(nil),     // 6: emcache.AddCollectionRequest
-	(*AddCollectionResponse)(nil),    // 7: emcache.AddCollectionResponse
-	(*RemoveCollectionRequest)(nil),  // 8: emcache.RemoveCollectionRequest
-	(*RemoveCollectionResponse)(nil), // 9: emcache.RemoveCollectionResponse
-	(*timestamppb.Timestamp)(nil),    // 10: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),          // 11: google.protobuf.Struct
+	(DataType)(0),                    // 0: emcache.DataType
+	(OplogEntry_OperationType)(0),    // 1: emcache.OplogEntry.OperationType
+	(*Column)(nil),                   // 2: emcache.Column
+	(*Index)(nil),                    // 3: emcache.Index
+	(*Shape)(nil),                    // 4: emcache.Shape
+	(*DownloadDbRequest)(nil),        // 5: emcache.DownloadDbRequest
+	(*DownloadDbResponse)(nil),       // 6: emcache.DownloadDbResponse
+	(*GetOplogEntriesRequest)(nil),   // 7: emcache.GetOplogEntriesRequest
+	(*GetOplogEntriesResponse)(nil),  // 8: emcache.GetOplogEntriesResponse
+	(*OplogEntry)(nil),               // 9: emcache.OplogEntry
+	(*AddCollectionRequest)(nil),     // 10: emcache.AddCollectionRequest
+	(*AddCollectionResponse)(nil),    // 11: emcache.AddCollectionResponse
+	(*RemoveCollectionRequest)(nil),  // 12: emcache.RemoveCollectionRequest
+	(*RemoveCollectionResponse)(nil), // 13: emcache.RemoveCollectionResponse
+	(*timestamppb.Timestamp)(nil),    // 14: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),          // 15: google.protobuf.Struct
 }
 var file_pkg_protos_emcache_proto_depIdxs = []int32{
-	5,  // 0: emcache.GetOplogEntriesResponse.entries:type_name -> emcache.OplogEntry
-	0,  // 1: emcache.OplogEntry.operation:type_name -> emcache.OplogEntry.OperationType
-	10, // 2: emcache.OplogEntry.timestamp:type_name -> google.protobuf.Timestamp
-	11, // 3: emcache.OplogEntry.data:type_name -> google.protobuf.Struct
-	1,  // 4: emcache.EmcacheService.DownloadDb:input_type -> emcache.DownloadDbRequest
-	3,  // 5: emcache.EmcacheService.GetOplogEntries:input_type -> emcache.GetOplogEntriesRequest
-	6,  // 6: emcache.EmcacheService.AddCollection:input_type -> emcache.AddCollectionRequest
-	8,  // 7: emcache.EmcacheService.RemoveCollection:input_type -> emcache.RemoveCollectionRequest
-	2,  // 8: emcache.EmcacheService.DownloadDb:output_type -> emcache.DownloadDbResponse
-	4,  // 9: emcache.EmcacheService.GetOplogEntries:output_type -> emcache.GetOplogEntriesResponse
-	7,  // 10: emcache.EmcacheService.AddCollection:output_type -> emcache.AddCollectionResponse
-	9,  // 11: emcache.EmcacheService.RemoveCollection:output_type -> emcache.RemoveCollectionResponse
-	8,  // [8:12] is the sub-list for method output_type
-	4,  // [4:8] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	0,  // 0: emcache.Column.type:type_name -> emcache.DataType
+	2,  // 1: emcache.Shape.columns:type_name -> emcache.Column
+	3,  // 2: emcache.Shape.indexes:type_name -> emcache.Index
+	9,  // 3: emcache.GetOplogEntriesResponse.entries:type_name -> emcache.OplogEntry
+	1,  // 4: emcache.OplogEntry.operation:type_name -> emcache.OplogEntry.OperationType
+	14, // 5: emcache.OplogEntry.timestamp:type_name -> google.protobuf.Timestamp
+	15, // 6: emcache.OplogEntry.data:type_name -> google.protobuf.Struct
+	4,  // 7: emcache.AddCollectionRequest.shape:type_name -> emcache.Shape
+	5,  // 8: emcache.EmcacheService.DownloadDb:input_type -> emcache.DownloadDbRequest
+	7,  // 9: emcache.EmcacheService.GetOplogEntries:input_type -> emcache.GetOplogEntriesRequest
+	10, // 10: emcache.EmcacheService.AddCollection:input_type -> emcache.AddCollectionRequest
+	12, // 11: emcache.EmcacheService.RemoveCollection:input_type -> emcache.RemoveCollectionRequest
+	6,  // 12: emcache.EmcacheService.DownloadDb:output_type -> emcache.DownloadDbResponse
+	8,  // 13: emcache.EmcacheService.GetOplogEntries:output_type -> emcache.GetOplogEntriesResponse
+	11, // 14: emcache.EmcacheService.AddCollection:output_type -> emcache.AddCollectionResponse
+	13, // 15: emcache.EmcacheService.RemoveCollection:output_type -> emcache.RemoveCollectionResponse
+	12, // [12:16] is the sub-list for method output_type
+	8,  // [8:12] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_pkg_protos_emcache_proto_init() }
@@ -629,8 +877,8 @@ func file_pkg_protos_emcache_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_protos_emcache_proto_rawDesc), len(file_pkg_protos_emcache_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   9,
+			NumEnums:      2,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

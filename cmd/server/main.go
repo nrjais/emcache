@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
+	"github.com/nrjais/emcache/internal/collectioncache"
 	"github.com/nrjais/emcache/internal/config"
 	"github.com/nrjais/emcache/internal/coordinator"
 	"github.com/nrjais/emcache/internal/db"
@@ -62,12 +63,15 @@ func main() {
 	var wg sync.WaitGroup
 	bgTaskCtx, bgTaskCancel := context.WithCancel(ctx)
 
-	err = startCentralFollower(bgTaskCtx, &wg, pgPool, cfg)
+	collectionCacheManager := collectioncache.NewManager(pgPool, cfg)
+	collectionCacheManager.Start(bgTaskCtx, &wg)
+
+	err = startCentralFollower(bgTaskCtx, &wg, pgPool, collectionCacheManager, cfg)
 	if err != nil {
 		log.Fatalf("Failed to start central follower: %v", err)
 	}
 
-	startCollectionCoordinator(bgTaskCtx, &wg, pgPool, mongoClient, mongoDBName, leaderElector, cfg)
+	startCollectionCoordinator(bgTaskCtx, &wg, pgPool, mongoClient, mongoDBName, leaderElector, collectionCacheManager, cfg)
 
 	startSnapshotCleanup(bgTaskCtx, &wg, cfg)
 
@@ -129,8 +133,8 @@ func setupLeaderElector(pgPool *pgxpool.Pool) (*leader.LeaderElector, string) {
 	return leaderElector, instanceID
 }
 
-func startCentralFollower(ctx context.Context, wg *sync.WaitGroup, pgPool *pgxpool.Pool, cfg *config.Config) error {
-	centralFollower, err := follower.NewMainFollower(pgPool, cfg.SQLiteDir, cfg)
+func startCentralFollower(ctx context.Context, wg *sync.WaitGroup, pgPool *pgxpool.Pool, cacheMgr *collectioncache.Manager, cfg *config.Config) error {
+	centralFollower, err := follower.NewMainFollower(pgPool, cacheMgr, cfg.SQLiteDir, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to create central follower: %w", err)
 	}
@@ -139,9 +143,9 @@ func startCentralFollower(ctx context.Context, wg *sync.WaitGroup, pgPool *pgxpo
 	return nil
 }
 
-func startCollectionCoordinator(ctx context.Context, wg *sync.WaitGroup, pgPool *pgxpool.Pool, mongoClient *mongo.Client, mongoDBName string, leaderElector *leader.LeaderElector, cfg *config.Config) {
+func startCollectionCoordinator(ctx context.Context, wg *sync.WaitGroup, pgPool *pgxpool.Pool, mongoClient *mongo.Client, mongoDBName string, leaderElector *leader.LeaderElector, cacheMgr *collectioncache.Manager, cfg *config.Config) {
 	log.Println("Initializing Collection Coordinator...")
-	coord := coordinator.NewCoordinator(pgPool, mongoClient, mongoDBName, leaderElector, cfg, wg)
+	coord := coordinator.NewCoordinator(pgPool, mongoClient, mongoDBName, leaderElector, cacheMgr, cfg, wg)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()

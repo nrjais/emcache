@@ -2,15 +2,19 @@ package grpcapi
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"strings"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nrjais/emcache/internal/db"
 	"github.com/nrjais/emcache/internal/follower"
+	"github.com/nrjais/emcache/internal/shape"
 	"github.com/nrjais/emcache/internal/snapshot"
 	pb "github.com/nrjais/emcache/pkg/protos"
 	"google.golang.org/grpc/codes"
@@ -18,6 +22,12 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+var validate *validator.Validate
+
+func init() {
+	validate = validator.New(validator.WithRequiredStructEnabled())
+}
 
 type server struct {
 	pb.UnimplementedEmcacheServiceServer
@@ -31,6 +41,7 @@ func NewEmcacheServer(pgPool *pgxpool.Pool, sqliteBaseDir string) pb.EmcacheServ
 		sqliteDir: sqliteBaseDir,
 	}
 }
+
 func (s *server) DownloadDb(req *pb.DownloadDbRequest, stream pb.EmcacheService_DownloadDbServer) error {
 	collectionName := req.GetCollectionName()
 	if collectionName == "" {
@@ -138,14 +149,55 @@ func (s *server) AddCollection(ctx context.Context, req *pb.AddCollectionRequest
 	if collectionName == "" {
 		return nil, status.Error(codes.InvalidArgument, "Collection name cannot be empty")
 	}
+	protoShape := req.GetShape()
+	if protoShape == nil {
+		return nil, status.Error(codes.InvalidArgument, "Shape definition cannot be empty")
+	}
 
 	log.Printf("gRPC AddCollection request for collection: %s", collectionName)
 
-	if err := db.AddReplicatedCollection(ctx, s.pgPool, collectionName); err != nil {
+	collShape, err := convertProtoShapeToInternal(protoShape)
+	if err != nil {
+		log.Printf("Error converting proto shape for collection '%s': %v", collectionName, err)
+		return nil, status.Errorf(codes.InvalidArgument, "Invalid shape structure: %v", err)
+	}
+
+	if err := validate.Struct(collShape); err != nil {
+		log.Printf("Internal shape validation failed for collection '%s': %v", collectionName, err)
+		var validationErrors validator.ValidationErrors
+		if errors.As(err, &validationErrors) {
+			var errMsgs []string
+			for _, fe := range validationErrors {
+				errMsgs = append(errMsgs, fmt.Sprintf("field '%s' failed validation '%s'", fe.Namespace(), fe.Tag()))
+			}
+			return nil, status.Errorf(codes.InvalidArgument, "Invalid shape definition: %s", strings.Join(errMsgs, "; "))
+		}
+		return nil, status.Errorf(codes.InvalidArgument, "Invalid shape definition: %v", err)
+	}
+
+	for _, col := range collShape.Columns {
+		if strings.ToLower(col.Name) == "id" {
+			return nil, status.Errorf(codes.InvalidArgument, "Column name 'id' is reserved and cannot be explicitly defined in the shape")
+		}
+	}
+
+	shapeBytes, err := json.Marshal(collShape)
+	if err != nil {
+		log.Printf("CRITICAL: Failed to marshal internal shape to JSON for collection '%s': %v", collectionName, err)
+		return nil, status.Error(codes.Internal, "Failed to process shape definition")
+	}
+
+	if err := db.AddReplicatedCollection(ctx, s.pgPool, collectionName, shapeBytes); err != nil {
+		if errors.Is(err, db.ErrCollectionAlreadyExists) {
+			log.Printf("Attempt to add collection '%s' failed: already exists.", collectionName)
+			return nil, status.Errorf(codes.AlreadyExists, "Collection '%s' is already configured for replication", collectionName)
+		}
+
 		log.Printf("Error adding replicated collection '%s' to database: %v", collectionName, err)
 		return nil, status.Error(codes.Internal, "Failed to add collection to replication list")
 	}
 
+	log.Printf("Successfully added collection '%s' for replication.", collectionName)
 	return &pb.AddCollectionResponse{}, nil
 }
 
@@ -199,4 +251,76 @@ func convertDbOplogToProto(entry db.OplogEntry) (*pb.OplogEntry, error) {
 		Data:       pbData,
 		Version:    int32(entry.Version),
 	}, nil
+}
+
+func convertProtoDataType(dt pb.DataType) shape.DataType {
+	switch dt {
+	case pb.DataType_JSONB:
+		return shape.JSONB
+	case pb.DataType_ANY:
+		return shape.Any
+	case pb.DataType_BOOL:
+		return shape.Bool
+	case pb.DataType_NUMBER:
+		return shape.Number
+	case pb.DataType_INTEGER:
+		return shape.Integer
+	case pb.DataType_TEXT:
+		return shape.Text
+	default:
+		return shape.Any
+	}
+}
+
+func convertProtoColumn(pc *pb.Column) shape.Column {
+	if pc == nil {
+		return shape.Column{}
+	}
+	return shape.Column{
+		Name: pc.GetName(),
+		Type: convertProtoDataType(pc.GetType()),
+		Path: pc.GetPath(),
+	}
+}
+
+func convertProtoIndex(pi *pb.Index) shape.Index {
+	if pi == nil {
+		return shape.Index{}
+	}
+	cols := make([]string, len(pi.GetColumns()))
+	copy(cols, pi.GetColumns())
+	return shape.Index{
+		Columns: cols,
+	}
+}
+
+func convertProtoShapeToInternal(ps *pb.Shape) (shape.Shape, error) {
+	if ps == nil {
+		return shape.Shape{}, fmt.Errorf("protobuf shape cannot be nil")
+	}
+
+	internalShape := shape.Shape{
+		Columns: make([]shape.Column, 0, len(ps.GetColumns())),
+		Indexes: make([]shape.Index, 0, len(ps.GetIndexes())),
+	}
+
+	for _, pc := range ps.GetColumns() {
+		if pc == nil {
+			continue
+		}
+		internalShape.Columns = append(internalShape.Columns, convertProtoColumn(pc))
+	}
+
+	for _, pi := range ps.GetIndexes() {
+		if pi == nil {
+			continue
+		}
+		internalShape.Indexes = append(internalShape.Indexes, convertProtoIndex(pi))
+	}
+
+	if len(internalShape.Columns) == 0 {
+		return shape.Shape{}, fmt.Errorf("shape must have at least one data column defined")
+	}
+
+	return internalShape, nil
 }

@@ -2,16 +2,22 @@ package db
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nrjais/emcache/internal/shape"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
 )
+
+var ErrCollectionNotFound = errors.New("not found in replicated_collections")
+var ErrCollectionAlreadyExists = errors.New("collection already configured for replication")
 
 func ConnectPostgres(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	config, err := pgxpool.ParseConfig(databaseURL)
@@ -108,6 +114,8 @@ func InsertOplogEntry(ctx context.Context, pool *pgxpool.Pool, entry OplogEntry)
 }
 
 func GetOplogEntriesGlobal(ctx context.Context, pool *pgxpool.Pool, afterID int64, limit int) ([]OplogEntry, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	sql := `
         SELECT id, operation, doc_id, created_at, collection, doc, version
         FROM oplog
@@ -222,13 +230,61 @@ func GetAllCurrentCollectionVersions(ctx context.Context, pool *pgxpool.Pool) ([
 	return versions, nil
 }
 
-func AddReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collectionName string) error {
-	sql := `INSERT INTO replicated_collections (collection_name) VALUES ($1) ON CONFLICT DO NOTHING`
-	_, err := pool.Exec(ctx, sql, collectionName)
+type ReplicatedCollection struct {
+	CollectionName string
+	CurrentVersion int
+	Shape          shape.Shape
+}
+
+func GetReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collectionName string) (*ReplicatedCollection, error) {
+	var rc ReplicatedCollection
+	var shapeJSON []byte
+
+	sql := `SELECT collection_name, current_version, shape
+           FROM replicated_collections
+           WHERE collection_name = $1`
+
+	err := pool.QueryRow(ctx, sql, collectionName).Scan(&rc.CollectionName, &rc.CurrentVersion, &shapeJSON)
 	if err != nil {
-		return fmt.Errorf("failed to add replicated collection '%s': %w", collectionName, err)
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("collection '%s' %w", collectionName, ErrCollectionNotFound)
+		}
+		return nil, fmt.Errorf("failed to query replicated collection '%s': %w", collectionName, err)
 	}
-	log.Printf("Added/Ensured collection '%s' in replicated_collections table.", collectionName)
+
+	if shapeJSON != nil {
+		rc.Shape = shape.Shape{}
+		if err := json.Unmarshal(shapeJSON, &rc.Shape); err != nil {
+			log.Printf("CRITICAL: Failed to unmarshal shape JSON from DB for collection '%s': %v", collectionName, err)
+			return nil, fmt.Errorf("failed to unmarshal shape for collection '%s': %w", collectionName, err)
+		}
+	}
+
+	return &rc, nil
+}
+
+func AddReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collectionName string, shapeJSON []byte) error {
+	var exists bool
+	checkSql := `SELECT EXISTS(SELECT 1 FROM replicated_collections WHERE collection_name = $1)`
+	err := pool.QueryRow(ctx, checkSql, collectionName).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("failed to check if collection '%s' exists: %w", collectionName, err)
+	}
+
+	if exists {
+		log.Printf("Attempted to add collection '%s' which already exists. No changes made.", collectionName)
+		return ErrCollectionAlreadyExists
+	}
+
+	sql := `
+        INSERT INTO replicated_collections (collection_name, shape, current_version)
+        VALUES ($1, $2, 1)`
+
+	_, err = pool.Exec(ctx, sql, collectionName, shapeJSON)
+	if err != nil {
+		return fmt.Errorf("failed to insert new replicated collection '%s': %w", collectionName, err)
+	}
+	log.Printf("Added collection '%s' to replicated_collections table.", collectionName)
 	return nil
 }
 
@@ -244,4 +300,44 @@ func RemoveReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collect
 		log.Printf("Collection '%s' not found in replicated_collections table for removal.", collectionName)
 	}
 	return nil
+}
+
+func GetAllReplicatedCollectionsWithShapes(ctx context.Context, pool *pgxpool.Pool) ([]ReplicatedCollection, error) {
+	sql := `SELECT collection_name, current_version, shape
+           FROM replicated_collections
+           ORDER BY collection_name`
+
+	rows, err := pool.Query(ctx, sql)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all replicated collections with shapes: %w", err)
+	}
+	defer rows.Close()
+
+	var collections []ReplicatedCollection
+	for rows.Next() {
+		var rc ReplicatedCollection
+		var shapeJSON []byte
+
+		if err := rows.Scan(&rc.CollectionName, &rc.CurrentVersion, &shapeJSON); err != nil {
+			return nil, fmt.Errorf("failed to scan replicated collection row: %w", err)
+		}
+
+		if shapeJSON != nil {
+			rc.Shape = shape.Shape{}
+			if err := json.Unmarshal(shapeJSON, &rc.Shape); err != nil {
+				log.Printf("CRITICAL: Failed to unmarshal shape JSON from DB for collection '%s': %v. Skipping this collection.", rc.CollectionName, err)
+				continue
+			}
+		} else {
+			log.Printf("Warning: Shape is NULL in DB for collection '%s'. Skipping this collection.", rc.CollectionName)
+			continue
+		}
+		collections = append(collections, rc)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating replicated collection rows: %w", err)
+	}
+
+	return collections, nil
 }

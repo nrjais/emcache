@@ -3,7 +3,6 @@ package e2e_tests
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -36,6 +35,15 @@ const (
 )
 
 var uniqueId = primitive.NewObjectID().Hex()
+
+func defaultTestDocShape() *pb.Shape {
+	return &pb.Shape{
+		Columns: []*pb.Column{
+			{Name: "name", Type: pb.DataType_TEXT, Path: "name"},
+			{Name: "age", Type: pb.DataType_INTEGER, Path: "age"},
+		},
+	}
+}
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
@@ -115,9 +123,11 @@ func setupSyncedCollection(t *testing.T, ctx context.Context, numInitialDocs int
 		require.NoError(t, err, "Failed to insert initial documents into MongoDB")
 	}
 
-	log.Printf("[%s] Calling AddCollection...", t.Name())
-	_, err := emcacheClient.AddCollection(ctx, collectionName)
+	log.Printf("[%s] Calling AddCollection with shape...", t.Name())
+	_, err := emcacheClient.AddCollection(ctx, collectionName, defaultTestDocShape())
 	require.NoError(t, err, "Failed to call AddCollection")
+
+	log.Printf("[%s] Waiting for collection setup propagation...", t.Name())
 	time.Sleep(10 * time.Second)
 
 	log.Printf("[%s] Calling DownloadDb...", t.Name())
@@ -158,17 +168,31 @@ func applyOplogEvents(t *testing.T, conn *sqlite.Conn, collectionName string, en
 				continue
 			}
 
-			stmt := "INSERT INTO _emcache_data (id, source) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET source = excluded.source"
+			dataMap := entry.Data.AsMap()
 
-			jsonData, jsonErr := entry.Data.MarshalJSON()
-			if jsonErr != nil {
-				err = fmt.Errorf("failed to marshal entry data to JSON for ID %s: %w", entry.Id, jsonErr)
-				log.Printf("[%s] ERROR: %v", t.Name(), err)
-				require.FailNow(t, "Failed to process UPSERT event", err.Error())
+			nameVal, nameOk := dataMap["name"].(string)
+			ageValRaw, ageOk := dataMap["age"]
+			var ageVal int64
+			if ageOk {
+				ageFloat, ok := ageValRaw.(float64)
+				if !ok {
+					err = fmt.Errorf("failed to assert age field type for ID %s: expected float64 got %T", entry.Id, ageValRaw)
+					require.FailNow(t, "Failed processing UPSERT age", err.Error())
+				}
+				ageVal = int64(ageFloat)
+			} else {
+				log.Printf("[%s] WARN: Age field missing in UPSERT data for ID %s. Defaulting to 0.", t.Name(), entry.Id)
+				ageVal = 0
 			}
 
+			if !nameOk {
+				err = fmt.Errorf("name field missing or not string in UPSERT data for ID %s", entry.Id)
+				require.FailNow(t, "Failed processing UPSERT name", err.Error())
+			}
+
+			stmt := "INSERT OR REPLACE INTO _emcache_data (id, name, age) VALUES (?, ?, ?)"
 			err = sqlitex.Execute(conn, stmt, &sqlitex.ExecOptions{
-				Args: []any{entry.Id, jsonData},
+				Args: []any{entry.Id, nameVal, ageVal},
 			})
 			if err != nil {
 				err = fmt.Errorf("failed to apply UPSERT for ID %s: %w", entry.Id, err)
@@ -202,37 +226,21 @@ func applyOplogEvents(t *testing.T, conn *sqlite.Conn, collectionName string, en
 func verifyDocsInSQLite(t *testing.T, conn *sqlite.Conn, collectionName string, expectedDocs map[string]TestDoc) {
 	t.Helper()
 
-	query := "SELECT id, source FROM _emcache_data"
+	query := "SELECT id, name, age FROM _emcache_data"
 	foundDocs := make(map[string]TestDoc)
 
 	err := sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			id := stmt.ColumnText(0)
+			name := stmt.ColumnText(1)
+			age := stmt.ColumnInt64(2)
 
-			length := stmt.ColumnLen(1)
-			if length == 0 {
-				log.Printf("[%s] WARN: Found document with ID %s but empty source data.", t.Name(), id)
-				return nil
+			doc := TestDoc{
+				ID:   id,
+				Name: name,
+				Age:  int(age),
 			}
 
-			sourceBytes := make([]byte, length)
-			bytesRead := stmt.ColumnBytes(1, sourceBytes)
-			if bytesRead != length {
-				log.Printf("[%s] WARN: Mismatch read length for doc ID %s (expected %d, got %d)", t.Name(), id, length, bytesRead)
-
-			}
-
-			var doc TestDoc
-			if err := json.Unmarshal(sourceBytes, &doc); err != nil {
-
-				log.Printf("[%s] ERROR: Failed to unmarshal source JSON for doc ID %s: %v\nJSON: %s", t.Name(), id, err, string(sourceBytes))
-				return nil
-			}
-
-			if doc.ID != id {
-				log.Printf("[%s] WARN: Mismatch between id column ('%s') and JSON id field ('%s')", t.Name(), id, doc.ID)
-
-			}
 			foundDocs[id] = doc
 			return nil
 		},

@@ -2,12 +2,11 @@ package coordinator
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"sync"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nrjais/emcache/internal/collectioncache"
 	"github.com/nrjais/emcache/internal/config"
 	"github.com/nrjais/emcache/internal/db"
 	"github.com/nrjais/emcache/internal/leader"
@@ -20,63 +19,57 @@ type Coordinator struct {
 	mongoClient        *mongo.Client
 	mongoDBName        string
 	leaderElector      *leader.LeaderElector
+	collCache          *collectioncache.Manager
 	cfg                *config.Config
-	checkInterval      time.Duration
 	managedCollections map[string]context.CancelFunc
 	mu                 sync.Mutex
 	wg                 *sync.WaitGroup
 }
 
-func NewCoordinator(pgPool *pgxpool.Pool, mongoClient *mongo.Client, mongoDBName string, leaderElector *leader.LeaderElector, cfg *config.Config, wg *sync.WaitGroup) *Coordinator {
-	checkInterval := time.Duration(cfg.CoordinatorOptions.CollectionRefreshIntervalSecs) * time.Second
-
+func NewCoordinator(pgPool *pgxpool.Pool, mongoClient *mongo.Client, mongoDBName string,
+	leaderElector *leader.LeaderElector, cacheMgr *collectioncache.Manager, cfg *config.Config, wg *sync.WaitGroup) *Coordinator {
 	return &Coordinator{
 		pgPool:             pgPool,
 		mongoClient:        mongoClient,
 		mongoDBName:        mongoDBName,
 		leaderElector:      leaderElector,
+		collCache:          cacheMgr,
 		cfg:                cfg,
-		checkInterval:      checkInterval,
 		managedCollections: make(map[string]context.CancelFunc),
 		wg:                 wg,
 	}
 }
 
 func (c *Coordinator) Start(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[Coordinator] Panic during periodic collection sync: %v", r)
+		}
+	}()
 	log.Println("[Coordinator] Starting...")
-
-	if err := c.syncCollections(ctx); err != nil {
-		log.Printf("[Coordinator] CRITICAL: Initial collection sync failed: %v. Coordinator stopping.", err)
-		return
-	}
-
-	ticker := time.NewTicker(c.checkInterval)
-	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
 			log.Println("[Coordinator] Context cancelled. Stopping coordinator and managed collections...")
 			c.stopAllManaging()
 			return
-		case <-ticker.C:
-			log.Println("[Coordinator] Running periodic collection sync...")
+		case <-c.collCache.RefreshCh:
+			log.Println("[Coordinator] Received cache refresh signal. Running periodic collection sync...")
 			if err := c.syncCollections(ctx); err != nil {
 				log.Printf("[Coordinator] Error during periodic collection sync: %v", err)
 			}
+			log.Println("[Coordinator] Periodic collection sync finished.")
 		}
 	}
 }
 
 func (c *Coordinator) syncCollections(ctx context.Context) error {
-	dbCollections, err := db.ListReplicatedCollections(ctx, c.pgPool)
-	if err != nil {
-		return fmt.Errorf("failed to list replicated collections: %w", err)
-	}
+	log.Println("[Coordinator] Starting syncCollections...")
+	cachedCollections := c.collCache.GetAllCollections()
 
-	dbCollectionsSet := make(map[string]struct{}, len(dbCollections))
-	for _, coll := range dbCollections {
-		dbCollectionsSet[coll] = struct{}{}
+	cachedCollectionsSet := make(map[string]db.ReplicatedCollection, len(cachedCollections))
+	for _, coll := range cachedCollections {
+		cachedCollectionsSet[coll.CollectionName] = coll
 	}
 
 	c.mu.Lock()
@@ -87,16 +80,16 @@ func (c *Coordinator) syncCollections(ctx context.Context) error {
 		currentManagedKeys = append(currentManagedKeys, k)
 	}
 
-	for _, dbColl := range dbCollections {
-		if _, exists := c.managedCollections[dbColl]; !exists {
-			log.Printf("[Coordinator] Detected new collection to manage: %s", dbColl)
-			c.startManaging(ctx, dbColl)
+	for collName, replicatedColl := range cachedCollectionsSet {
+		if _, exists := c.managedCollections[collName]; !exists {
+			log.Printf("[Coordinator] Detected new collection to manage from cache: %s", collName)
+			c.startManaging(ctx, replicatedColl)
 		}
 	}
 
 	for _, managedCollKey := range currentManagedKeys {
-		if _, existsInDB := dbCollectionsSet[managedCollKey]; !existsInDB {
-			log.Printf("[Coordinator] Detected removed collection to stop managing: %s", managedCollKey)
+		if _, existsInCache := cachedCollectionsSet[managedCollKey]; !existsInCache {
+			log.Printf("[Coordinator] Detected removed collection (no longer in cache) to stop managing: %s", managedCollKey)
 			c.stopManaging(managedCollKey)
 		}
 	}
@@ -104,19 +97,20 @@ func (c *Coordinator) syncCollections(ctx context.Context) error {
 	return nil
 }
 
-func (c *Coordinator) startManaging(parentCtx context.Context, collectionName string) {
+func (c *Coordinator) startManaging(parentCtx context.Context, replicatedColl db.ReplicatedCollection) {
+	collectionName := replicatedColl.CollectionName
+
 	if _, exists := c.managedCollections[collectionName]; exists {
 		log.Printf("[Coordinator:%s] Collection is already being managed.", collectionName)
 		return
 	}
 
-	log.Printf("[Coordinator:%s] Starting management.", collectionName)
-
 	collCtx, collCancel := context.WithCancel(parentCtx)
+
 	c.managedCollections[collectionName] = collCancel
 
 	c.wg.Add(1)
-	go manager.ManageCollection(collCtx, c.wg, collectionName, c.pgPool, c.mongoClient, c.mongoDBName, c.leaderElector, c.cfg)
+	go manager.ManageCollection(collCtx, c.wg, collectionName, replicatedColl.Shape, c.pgPool, c.mongoClient, c.mongoDBName, c.leaderElector, c.cfg)
 }
 
 func (c *Coordinator) stopManaging(collectionName string) {

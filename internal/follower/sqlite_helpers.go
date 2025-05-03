@@ -1,14 +1,17 @@
 package follower
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/nrjais/emcache/internal/db"
+	"github.com/nrjais/emcache/internal/shape"
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
 )
@@ -25,13 +28,14 @@ func GetCollectionDBPath(collectionName string, sqliteBaseDir string, version in
 	return filepath.Join(sqliteBaseDir, fileName)
 }
 
-func openCollectionDB(collectionName string, sqliteBaseDir string, dbPath string, version int) (*sqlite.Conn, error) {
+func openCollectionDB(collectionName, sqliteBaseDir, dbPath string, version int, collShape shape.Shape) (*sqlite.Conn, error) {
 	if sqliteBaseDir == "" {
 		return nil, fmt.Errorf("sqlite base directory cannot be empty")
 	}
 	if version <= 0 {
 		return nil, fmt.Errorf("database version must be positive")
 	}
+
 	if err := os.MkdirAll(sqliteBaseDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create directory for SQLite DBs at %s: %w", sqliteBaseDir, err)
 	}
@@ -46,9 +50,9 @@ func openCollectionDB(collectionName string, sqliteBaseDir string, dbPath string
 		return nil, fmt.Errorf("failed to initialize metadata table in %s: %w", dbPath, err)
 	}
 
-	if err := ensureCollectionTable(conn); err != nil {
+	if err := ensureCollectionTableAndIndexes(conn, collShape); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("failed to ensure data table in %s: %w", dbPath, err)
+		return nil, fmt.Errorf("failed to ensure data table/indexes in %s: %w", dbPath, err)
 	}
 
 	log.Printf("[%s] Opened SQLite Conn: %s (Version: %d)", collectionName, dbPath, version)
@@ -114,7 +118,8 @@ func setLocalDBVersion(conn *sqlite.Conn, version int) error {
 }
 
 func initMetaTable(conn *sqlite.Conn) error {
-	return sqlitex.Execute(conn, "CREATE TABLE IF NOT EXISTS _emcache_meta (key TEXT PRIMARY KEY, value ANY) STRICT", nil)
+	sql := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (key TEXT PRIMARY KEY, value ANY) STRICT", metadataTableName)
+	return sqlitex.Execute(conn, sql, nil)
 }
 
 func getLastAppliedOplogIndex(conn *sqlite.Conn) (int64, error) {
@@ -149,38 +154,130 @@ func setLastAppliedOplogIndex(conn *sqlite.Conn, index int64) error {
 	return nil
 }
 
-func applyOplogEntry(conn *sqlite.Conn, entry db.OplogEntry) error {
-	if entry.Operation == "UPSERT" {
-		sql := fmt.Sprintf(`
-            INSERT INTO %s (id, source)
-            VALUES (?, ?)
-            ON CONFLICT(id) DO UPDATE SET source = excluded.source`, dataTableName)
-		args := []any{
-			entry.DocID,
-			entry.Doc,
-		}
-		err := sqlitex.Execute(conn, sql, &sqlitex.ExecOptions{Args: args})
-		if err != nil {
-			return fmt.Errorf("failed to execute upsert for doc %s: %w", entry.DocID, err)
-		}
-	} else if entry.Operation == "DELETE" {
-		sql := fmt.Sprintf("DELETE FROM %s WHERE id = ?", dataTableName)
-		args := []any{entry.DocID}
-		err := sqlitex.Execute(conn, sql, &sqlitex.ExecOptions{Args: args})
-		if err != nil {
-			return fmt.Errorf("failed to execute delete for doc %s: %w", entry.DocID, err)
-		}
-	} else {
-		return fmt.Errorf("unknown oplog operation: %s", entry.Operation)
+func mapShapeTypeToSQLite(dt shape.DataType) string {
+	switch dt {
+	case shape.Integer:
+		return "INTEGER"
+	case shape.Number:
+		return "REAL"
+	case shape.Bool:
+		return "INTEGER"
+	case shape.Text:
+		return "TEXT"
+	case shape.JSONB:
+		return "JSONB"
+	case shape.Any:
+		return "ANY"
+	default:
+		return "ANY"
 	}
+}
+
+func quoteIdentifier(ident string) string {
+	return `"` + ident + `"`
+}
+
+func ensureCollectionTableAndIndexes(conn *sqlite.Conn, collShape shape.Shape) error {
+	var colDefs []string
+	idColDef := quoteIdentifier("id") + " TEXT PRIMARY KEY"
+	colDefs = append(colDefs, idColDef)
+
+	colNames := make(map[string]struct{})
+	colNames["id"] = struct{}{}
+
+	for _, col := range collShape.Columns {
+		if col.Name == "id" {
+			return fmt.Errorf("column name 'id' is reserved and implicitly created from source '_id'")
+		}
+		if _, exists := colNames[col.Name]; exists {
+			return fmt.Errorf("duplicate column name defined in shape: %s", col.Name)
+		}
+		colDef := fmt.Sprintf("%s %s", quoteIdentifier(col.Name), mapShapeTypeToSQLite(col.Type))
+		colDefs = append(colDefs, colDef)
+		colNames[col.Name] = struct{}{}
+	}
+
+	tableSQL := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (%s) STRICT;`,
+		quoteIdentifier(dataTableName),
+		strings.Join(colDefs, ", "))
+	if err := sqlitex.Execute(conn, tableSQL, nil); err != nil {
+		return fmt.Errorf("failed to execute create table statement: %w\nSQL: %s", err, tableSQL)
+	}
+
+	for i, indexDef := range collShape.Indexes {
+		var quotedIndexCols []string
+		for _, colName := range indexDef.Columns {
+			if _, exists := colNames[colName]; !exists {
+				return fmt.Errorf("index %d references non-existent column: %s", i, colName)
+			}
+			quotedIndexCols = append(quotedIndexCols, quoteIdentifier(colName))
+		}
+		if len(quotedIndexCols) == 0 {
+			continue
+		}
+
+		indexName := fmt.Sprintf("idx_%s_%d", dataTableName, i)
+		indexSQL := fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s (%s);",
+			quoteIdentifier(indexName),
+			quoteIdentifier(dataTableName),
+			strings.Join(quotedIndexCols, ", "))
+
+		if err := sqlitex.Execute(conn, indexSQL, nil); err != nil {
+			return fmt.Errorf("failed to execute create index statement for index %d: %w\nSQL: %s", i, err, indexSQL)
+		}
+	}
+
 	return nil
 }
 
-func ensureCollectionTable(conn *sqlite.Conn) error {
-	tableSQL := fmt.Sprintf(`
-		CREATE TABLE IF NOT EXISTS %s (
-			id TEXT PRIMARY KEY,
-			source BLOB
-		)`, dataTableName)
-	return sqlitex.Execute(conn, tableSQL, nil)
+func applyOplogEntry(conn *sqlite.Conn, entry db.OplogEntry, collShape shape.Shape) error {
+	idColNameQuoted := quoteIdentifier("id")
+
+	if entry.Operation == "UPSERT" {
+		if entry.Doc == nil {
+			log.Printf("Warning: UPSERT operation missing document data for ID %s, collection %s. Skipping apply.", entry.DocID, entry.Collection)
+			return nil
+		}
+
+		var data map[string]any
+		if err := json.Unmarshal(entry.Doc, &data); err != nil {
+			return fmt.Errorf("failed to unmarshal transformed JSON for doc %s, collection %s: %w", entry.DocID, entry.Collection, err)
+		}
+
+		var cols []string
+		var placeholders []string
+		var args []any
+
+		cols = append(cols, idColNameQuoted)
+		placeholders = append(placeholders, "?")
+		args = append(args, entry.DocID)
+
+		for _, shapeCol := range collShape.Columns {
+			cols = append(cols, quoteIdentifier(shapeCol.Name))
+			placeholders = append(placeholders, "?")
+			args = append(args, data[shapeCol.Name])
+		}
+
+		sql := fmt.Sprintf("INSERT OR REPLACE INTO %s (%s) VALUES (%s)",
+			quoteIdentifier(dataTableName),
+			strings.Join(cols, ", "),
+			strings.Join(placeholders, ", "))
+
+		err := sqlitex.Execute(conn, sql, &sqlitex.ExecOptions{Args: args})
+		if err != nil {
+			return fmt.Errorf("failed to execute shaped upsert for doc %s, collection %s: %w", entry.DocID, entry.Collection, err)
+		}
+	} else if entry.Operation == "DELETE" {
+		sql := fmt.Sprintf("DELETE FROM %s WHERE %s = ?",
+			quoteIdentifier(dataTableName),
+			idColNameQuoted)
+		args := []any{entry.DocID}
+		err := sqlitex.Execute(conn, sql, &sqlitex.ExecOptions{Args: args})
+		if err != nil {
+			return fmt.Errorf("failed to execute shaped delete for doc %s, collection %s: %w", entry.DocID, entry.Collection, err)
+		}
+	} else {
+		return fmt.Errorf("unknown oplog operation '%s' for doc %s, collection %s", entry.Operation, entry.DocID, entry.Collection)
+	}
+	return nil
 }

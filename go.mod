@@ -11,6 +11,7 @@ require (
 	github.com/spf13/viper v1.20.1
 	github.com/stretchr/testify v1.10.0
 	go.mongodb.org/mongo-driver v1.17.3
+	golang.org/x/exp v0.0.0-20230315142452-642cacee5cc0
 	google.golang.org/grpc v1.72.0
 	google.golang.org/protobuf v1.36.6
 	zombiezen.com/go/sqlite v1.4.0

@@ -86,8 +86,14 @@ func (c *Client) GetOplogEntries(ctx context.Context, collectionNames []string, 
 	return resp, nil
 }
 
-func (c *Client) AddCollection(ctx context.Context, collectionName string) (*pb.AddCollectionResponse, error) {
-	req := &pb.AddCollectionRequest{CollectionName: collectionName}
+func (c *Client) AddCollection(ctx context.Context, collectionName string, shape *pb.Shape) (*pb.AddCollectionResponse, error) {
+	if shape == nil {
+		return nil, fmt.Errorf("shape cannot be nil")
+	}
+	req := &pb.AddCollectionRequest{
+		CollectionName: collectionName,
+		Shape:          shape,
+	}
 	resp, err := c.client.AddCollection(ctx, req)
 	if err != nil {
 		return nil, err
