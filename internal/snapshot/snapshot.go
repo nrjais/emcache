@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -128,7 +129,7 @@ func StartCleanupLoop(ctx context.Context, wg *sync.WaitGroup, ttl time.Duration
 	defer wg.Done()
 	log.Printf("[Snapshot] Starting cleanup loop with TTL: %v", ttl)
 
-	checkInterval := max(ttl/2, 1*time.Minute)
+	checkInterval := ttl / 2
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 
@@ -176,15 +177,15 @@ func cleanupStaleSnapshots(ttl time.Duration, snapshotDir string) {
 		if _, ok := toKeep[file.Name()]; ok {
 			continue
 		}
-
-		log.Printf("[Snapshot] Deleting stale snapshot file %s", file.Name())
 		snapshotsToDelete = append(snapshotsToDelete, file.Name())
 	}
 
 	for _, path := range snapshotsToDelete {
-		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
-			log.Printf("[Snapshot] Error deleting snapshot file %s: %v", path, rmErr)
+		fullPath := filepath.Join(snapshotDir, path)
+		if rmErr := os.Remove(fullPath); rmErr != nil {
+			log.Printf("[Snapshot] Error deleting snapshot file %s: %v", fullPath, rmErr)
 		} else {
+			log.Printf("[Snapshot] Deleted stale snapshot file %s", fullPath)
 			deletedCount++
 		}
 	}
