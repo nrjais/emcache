@@ -81,6 +81,55 @@ func (DataType) EnumDescriptor() ([]byte, []int) {
 	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{0}
 }
 
+type Compression int32
+
+const (
+	Compression_NONE   Compression = 0
+	Compression_ZSTD   Compression = 1
+	Compression_BROTLI Compression = 2
+)
+
+// Enum value maps for Compression.
+var (
+	Compression_name = map[int32]string{
+		0: "NONE",
+		1: "ZSTD",
+		2: "BROTLI",
+	}
+	Compression_value = map[string]int32{
+		"NONE":   0,
+		"ZSTD":   1,
+		"BROTLI": 2,
+	}
+)
+
+func (x Compression) Enum() *Compression {
+	p := new(Compression)
+	*p = x
+	return p
+}
+
+func (x Compression) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Compression) Descriptor() protoreflect.EnumDescriptor {
+	return file_pkg_protos_emcache_proto_enumTypes[1].Descriptor()
+}
+
+func (Compression) Type() protoreflect.EnumType {
+	return &file_pkg_protos_emcache_proto_enumTypes[1]
+}
+
+func (x Compression) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Compression.Descriptor instead.
+func (Compression) EnumDescriptor() ([]byte, []int) {
+	return file_pkg_protos_emcache_proto_rawDescGZIP(), []int{1}
+}
+
 type OplogEntry_OperationType int32
 
 const (
@@ -111,11 +160,11 @@ func (x OplogEntry_OperationType) String() string {
 }
 
 func (OplogEntry_OperationType) Descriptor() protoreflect.EnumDescriptor {
-	return file_pkg_protos_emcache_proto_enumTypes[1].Descriptor()
+	return file_pkg_protos_emcache_proto_enumTypes[2].Descriptor()
 }
 
 func (OplogEntry_OperationType) Type() protoreflect.EnumType {
-	return &file_pkg_protos_emcache_proto_enumTypes[1]
+	return &file_pkg_protos_emcache_proto_enumTypes[2]
 }
 
 func (x OplogEntry_OperationType) Number() protoreflect.EnumNumber {
@@ -434,6 +483,7 @@ func (x *Collection) GetShape() *Shape {
 type DownloadDbRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	CollectionName string                 `protobuf:"bytes,1,opt,name=collection_name,json=collectionName,proto3" json:"collection_name,omitempty"`
+	Compression    Compression            `protobuf:"varint,2,opt,name=compression,proto3,enum=emcache.Compression" json:"compression,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -473,6 +523,13 @@ func (x *DownloadDbRequest) GetCollectionName() string {
 		return x.CollectionName
 	}
 	return ""
+}
+
+func (x *DownloadDbRequest) GetCompression() Compression {
+	if x != nil {
+		return x.Compression
+	}
+	return Compression_NONE
 }
 
 type DownloadDbResponse struct {
@@ -913,9 +970,10 @@ const file_pkg_protos_emcache_proto_rawDesc = "" +
 	"Collection\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x05R\aversion\x12$\n" +
-	"\x05shape\x18\x03 \x01(\v2\x0e.emcache.ShapeR\x05shape\"<\n" +
+	"\x05shape\x18\x03 \x01(\v2\x0e.emcache.ShapeR\x05shape\"t\n" +
 	"\x11DownloadDbRequest\x12'\n" +
-	"\x0fcollection_name\x18\x01 \x01(\tR\x0ecollectionName\"D\n" +
+	"\x0fcollection_name\x18\x01 \x01(\tR\x0ecollectionName\x126\n" +
+	"\vcompression\x18\x02 \x01(\x0e2\x14.emcache.CompressionR\vcompression\"D\n" +
 	"\x12DownloadDbResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x05R\aversion\x12\x14\n" +
 	"\x05chunk\x18\x02 \x01(\fR\x05chunk\"z\n" +
@@ -956,7 +1014,12 @@ const file_pkg_protos_emcache_proto_rawDesc = "" +
 	"\n" +
 	"\x06NUMBER\x10\x03\x12\v\n" +
 	"\aINTEGER\x10\x04\x12\b\n" +
-	"\x04TEXT\x10\x052\xab\x03\n" +
+	"\x04TEXT\x10\x05*-\n" +
+	"\vCompression\x12\b\n" +
+	"\x04NONE\x10\x00\x12\b\n" +
+	"\x04ZSTD\x10\x01\x12\n" +
+	"\n" +
+	"\x06BROTLI\x10\x022\xab\x03\n" +
 	"\x0eEmcacheService\x12Q\n" +
 	"\x0eGetCollections\x12\x1e.emcache.GetCollectionsRequest\x1a\x1f.emcache.GetCollectionsResponse\x12G\n" +
 	"\n" +
@@ -977,55 +1040,57 @@ func file_pkg_protos_emcache_proto_rawDescGZIP() []byte {
 	return file_pkg_protos_emcache_proto_rawDescData
 }
 
-var file_pkg_protos_emcache_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_pkg_protos_emcache_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_pkg_protos_emcache_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_pkg_protos_emcache_proto_goTypes = []any{
 	(DataType)(0),                    // 0: emcache.DataType
-	(OplogEntry_OperationType)(0),    // 1: emcache.OplogEntry.OperationType
-	(*Column)(nil),                   // 2: emcache.Column
-	(*Index)(nil),                    // 3: emcache.Index
-	(*Shape)(nil),                    // 4: emcache.Shape
-	(*GetCollectionsRequest)(nil),    // 5: emcache.GetCollectionsRequest
-	(*GetCollectionsResponse)(nil),   // 6: emcache.GetCollectionsResponse
-	(*Collection)(nil),               // 7: emcache.Collection
-	(*DownloadDbRequest)(nil),        // 8: emcache.DownloadDbRequest
-	(*DownloadDbResponse)(nil),       // 9: emcache.DownloadDbResponse
-	(*GetOplogEntriesRequest)(nil),   // 10: emcache.GetOplogEntriesRequest
-	(*GetOplogEntriesResponse)(nil),  // 11: emcache.GetOplogEntriesResponse
-	(*OplogEntry)(nil),               // 12: emcache.OplogEntry
-	(*AddCollectionRequest)(nil),     // 13: emcache.AddCollectionRequest
-	(*AddCollectionResponse)(nil),    // 14: emcache.AddCollectionResponse
-	(*RemoveCollectionRequest)(nil),  // 15: emcache.RemoveCollectionRequest
-	(*RemoveCollectionResponse)(nil), // 16: emcache.RemoveCollectionResponse
-	(*timestamppb.Timestamp)(nil),    // 17: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),          // 18: google.protobuf.Struct
+	(Compression)(0),                 // 1: emcache.Compression
+	(OplogEntry_OperationType)(0),    // 2: emcache.OplogEntry.OperationType
+	(*Column)(nil),                   // 3: emcache.Column
+	(*Index)(nil),                    // 4: emcache.Index
+	(*Shape)(nil),                    // 5: emcache.Shape
+	(*GetCollectionsRequest)(nil),    // 6: emcache.GetCollectionsRequest
+	(*GetCollectionsResponse)(nil),   // 7: emcache.GetCollectionsResponse
+	(*Collection)(nil),               // 8: emcache.Collection
+	(*DownloadDbRequest)(nil),        // 9: emcache.DownloadDbRequest
+	(*DownloadDbResponse)(nil),       // 10: emcache.DownloadDbResponse
+	(*GetOplogEntriesRequest)(nil),   // 11: emcache.GetOplogEntriesRequest
+	(*GetOplogEntriesResponse)(nil),  // 12: emcache.GetOplogEntriesResponse
+	(*OplogEntry)(nil),               // 13: emcache.OplogEntry
+	(*AddCollectionRequest)(nil),     // 14: emcache.AddCollectionRequest
+	(*AddCollectionResponse)(nil),    // 15: emcache.AddCollectionResponse
+	(*RemoveCollectionRequest)(nil),  // 16: emcache.RemoveCollectionRequest
+	(*RemoveCollectionResponse)(nil), // 17: emcache.RemoveCollectionResponse
+	(*timestamppb.Timestamp)(nil),    // 18: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),          // 19: google.protobuf.Struct
 }
 var file_pkg_protos_emcache_proto_depIdxs = []int32{
 	0,  // 0: emcache.Column.type:type_name -> emcache.DataType
-	2,  // 1: emcache.Shape.columns:type_name -> emcache.Column
-	3,  // 2: emcache.Shape.indexes:type_name -> emcache.Index
-	7,  // 3: emcache.GetCollectionsResponse.collections:type_name -> emcache.Collection
-	4,  // 4: emcache.Collection.shape:type_name -> emcache.Shape
-	12, // 5: emcache.GetOplogEntriesResponse.entries:type_name -> emcache.OplogEntry
-	1,  // 6: emcache.OplogEntry.operation:type_name -> emcache.OplogEntry.OperationType
-	17, // 7: emcache.OplogEntry.timestamp:type_name -> google.protobuf.Timestamp
-	18, // 8: emcache.OplogEntry.data:type_name -> google.protobuf.Struct
-	4,  // 9: emcache.AddCollectionRequest.shape:type_name -> emcache.Shape
-	5,  // 10: emcache.EmcacheService.GetCollections:input_type -> emcache.GetCollectionsRequest
-	8,  // 11: emcache.EmcacheService.DownloadDb:input_type -> emcache.DownloadDbRequest
-	10, // 12: emcache.EmcacheService.GetOplogEntries:input_type -> emcache.GetOplogEntriesRequest
-	13, // 13: emcache.EmcacheService.AddCollection:input_type -> emcache.AddCollectionRequest
-	15, // 14: emcache.EmcacheService.RemoveCollection:input_type -> emcache.RemoveCollectionRequest
-	6,  // 15: emcache.EmcacheService.GetCollections:output_type -> emcache.GetCollectionsResponse
-	9,  // 16: emcache.EmcacheService.DownloadDb:output_type -> emcache.DownloadDbResponse
-	11, // 17: emcache.EmcacheService.GetOplogEntries:output_type -> emcache.GetOplogEntriesResponse
-	14, // 18: emcache.EmcacheService.AddCollection:output_type -> emcache.AddCollectionResponse
-	16, // 19: emcache.EmcacheService.RemoveCollection:output_type -> emcache.RemoveCollectionResponse
-	15, // [15:20] is the sub-list for method output_type
-	10, // [10:15] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	3,  // 1: emcache.Shape.columns:type_name -> emcache.Column
+	4,  // 2: emcache.Shape.indexes:type_name -> emcache.Index
+	8,  // 3: emcache.GetCollectionsResponse.collections:type_name -> emcache.Collection
+	5,  // 4: emcache.Collection.shape:type_name -> emcache.Shape
+	1,  // 5: emcache.DownloadDbRequest.compression:type_name -> emcache.Compression
+	13, // 6: emcache.GetOplogEntriesResponse.entries:type_name -> emcache.OplogEntry
+	2,  // 7: emcache.OplogEntry.operation:type_name -> emcache.OplogEntry.OperationType
+	18, // 8: emcache.OplogEntry.timestamp:type_name -> google.protobuf.Timestamp
+	19, // 9: emcache.OplogEntry.data:type_name -> google.protobuf.Struct
+	5,  // 10: emcache.AddCollectionRequest.shape:type_name -> emcache.Shape
+	6,  // 11: emcache.EmcacheService.GetCollections:input_type -> emcache.GetCollectionsRequest
+	9,  // 12: emcache.EmcacheService.DownloadDb:input_type -> emcache.DownloadDbRequest
+	11, // 13: emcache.EmcacheService.GetOplogEntries:input_type -> emcache.GetOplogEntriesRequest
+	14, // 14: emcache.EmcacheService.AddCollection:input_type -> emcache.AddCollectionRequest
+	16, // 15: emcache.EmcacheService.RemoveCollection:input_type -> emcache.RemoveCollectionRequest
+	7,  // 16: emcache.EmcacheService.GetCollections:output_type -> emcache.GetCollectionsResponse
+	10, // 17: emcache.EmcacheService.DownloadDb:output_type -> emcache.DownloadDbResponse
+	12, // 18: emcache.EmcacheService.GetOplogEntries:output_type -> emcache.GetOplogEntriesResponse
+	15, // 19: emcache.EmcacheService.AddCollection:output_type -> emcache.AddCollectionResponse
+	17, // 20: emcache.EmcacheService.RemoveCollection:output_type -> emcache.RemoveCollectionResponse
+	16, // [16:21] is the sub-list for method output_type
+	11, // [11:16] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_pkg_protos_emcache_proto_init() }
@@ -1038,7 +1103,7 @@ func file_pkg_protos_emcache_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_protos_emcache_proto_rawDesc), len(file_pkg_protos_emcache_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      3,
 			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,

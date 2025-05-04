@@ -8,15 +8,15 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	pb "github.com/nrjais/emcache/pkg/protos"
+	"github.com/samber/lo"
+	lop "github.com/samber/lo/parallel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 type CollectionConfig struct {
@@ -32,10 +32,8 @@ type ClientConfig struct {
 }
 
 type collectionState struct {
-	config  CollectionConfig
-	version int32
-	db      *sql.DB
-	details *pb.Collection
+	config CollectionConfig
+	sqlite *sqliteCollection
 }
 
 type Client struct {
@@ -91,52 +89,53 @@ func (c *Client) init(ctx context.Context, config ClientConfig) error {
 		return fmt.Errorf("failed to get collections: %w", err)
 	}
 
-	for _, collConfig := range config.Collections {
-		if err := c.addCollectionInternal(ctx, collConfig, collectionsData); err != nil {
+	results := lop.Map(config.Collections, func(collConfig CollectionConfig, _ int) lo.Tuple2[*collectionState, error] {
+		state, err := c.addCollectionInternal(ctx, collConfig, collectionsData)
+		return lo.T2(state, err)
+	})
+
+	for _, result := range results {
+		if result.B != nil {
 			_ = c.Close()
-			return fmt.Errorf("failed to initialize collection %s: %w", collConfig.Name, err)
+			return fmt.Errorf("failed to initialize one or more collections: %w", result.B)
 		}
+		c.collections[result.A.config.Name] = result.A
 	}
+
 	return nil
 }
 
-func (c *Client) addCollectionInternal(ctx context.Context, collConfig CollectionConfig, collectionsData *pb.GetCollectionsResponse) error {
-	if _, exists := c.collections[collConfig.Name]; exists {
-		return fmt.Errorf("duplicate collection '%s' configured", collConfig.Name)
-	}
-
-	c.collections[collConfig.Name] = &collectionState{config: collConfig}
-
+func (c *Client) addCollectionInternal(ctx context.Context, collConfig CollectionConfig, collectionsData *pb.GetCollectionsResponse) (*collectionState, error) {
 	dbPath := filepath.Join(c.config.Directory, collConfig.Name+".sqlite")
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory %s for collection '%s': %w", dir, collConfig.Name, err)
+		return nil, fmt.Errorf("failed to create directory %s for collection '%s': %w", dir, collConfig.Name, err)
 	}
 
 	dbVersion, err := c.downloadDb(ctx, dbPath, collConfig)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("failed to download db for collection '%s': %w", collConfig.Name, err)
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openSQLiteDB(dbPath)
 	if err != nil {
-		return fmt.Errorf("failed to open sqlite db (%s) for collection '%s': %w", dbPath, collConfig.Name, err)
+		return nil, fmt.Errorf("failed opening db for collection '%s': %w", collConfig.Name, err)
 	}
-	db.SetMaxOpenConns(1)
 
 	details, err := c.getCollectionDetails(collConfig.Name, dbVersion, collectionsData.Collections)
 	if err != nil {
-		return fmt.Errorf("failed to get collection details for collection '%s': %w", collConfig.Name, err)
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to get collection details for collection '%s': %w", collConfig.Name, err)
 	}
 
-	c.collections[collConfig.Name] = &collectionState{
-		config:  collConfig,
-		db:      db,
-		version: dbVersion,
-		details: details,
-	}
-
-	return nil
+	return &collectionState{
+		config: collConfig,
+		sqlite: &sqliteCollection{
+			db:      db,
+			version: dbVersion,
+			details: details,
+		},
+	}, nil
 }
 
 func (c *Client) downloadDb(ctx context.Context, dbPath string, collConfig CollectionConfig) (int32, error) {
@@ -170,8 +169,8 @@ func (c *Client) Close() error {
 func (c *Client) close() error {
 	var firstErr error
 	for _, state := range c.collections {
-		if state.db != nil {
-			if err := state.db.Close(); err != nil {
+		if state.sqlite != nil {
+			if err := state.sqlite.close(); err != nil {
 				if firstErr == nil {
 					firstErr = err
 				}
@@ -294,9 +293,8 @@ func (c *Client) runCollectionUpdates(ctx context.Context) {
 	}
 }
 
-// applyOplogEntries applies a batch of oplog entries to the given database connection within a transaction.
-// It constructs SQL statements based on the operation type (UPSERT/DELETE) defined in the OplogEntry.
-// It returns the index of the last successfully applied entry.
+// applyOplogEntries applies a batch of oplog entries to the appropriate collection databases.
+// It returns the index of the last successfully applied entry across all collections.
 func (c *Client) applyOplogEntries(ctx context.Context, entries []*pb.OplogEntry) (int64, error) {
 	entriesByCollection := make(map[string][]*pb.OplogEntry)
 	lastAppliedIdx := c.lastOplogIdx
@@ -307,108 +305,22 @@ func (c *Client) applyOplogEntries(ctx context.Context, entries []*pb.OplogEntry
 		}
 	}
 
-	for collection, entries := range entriesByCollection {
-		db, ok := c.collections[collection]
+	for collectionName, collectionEntries := range entriesByCollection {
+		state, ok := c.collections[collectionName]
 		if !ok {
-			return c.lastOplogIdx, fmt.Errorf("database for collection '%s' not found", collection)
+			continue
 		}
-		err := c.applyOplogEntriesToDb(ctx, db, entries)
+		if state.sqlite == nil {
+			continue
+		}
+
+		err := state.sqlite.applyOplogEntries(ctx, collectionEntries)
 		if err != nil {
-			return c.lastOplogIdx, fmt.Errorf("failed to apply oplog entries to collection '%s': %w", collection, err)
+			return c.lastOplogIdx, fmt.Errorf("failed to apply oplog entries to collection '%s': %w", collectionName, err)
 		}
 	}
 
 	return lastAppliedIdx, nil
-}
-
-func (c *Client) applyOplogEntriesToDb(ctx context.Context, state *collectionState, entries []*pb.OplogEntry) error {
-	tx, err := state.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	const dataTableName = "_emcache_data"
-
-	for _, entry := range entries {
-		const pkColumn = "id"
-		pkValue := entry.Id
-		if state.version != entry.Version {
-			// Skip entries with a version that is different from the current collection's version
-			// TODO: Add realtime swap of the database file here to latest version
-			continue
-		}
-
-		switch entry.Operation {
-		case pb.OplogEntry_UPSERT:
-			columns := []string{quoteIdentifier(pkColumn)}
-			values := []any{pkValue}
-			placeholders := []string{"?"}
-
-			for _, column := range state.details.Shape.Columns {
-				columns = append(columns, quoteIdentifier(column.Name))
-				values = append(values, valueFromProto(entry.Data.Fields[column.Name]))
-				placeholders = append(placeholders, "?")
-			}
-
-			sql := fmt.Sprintf("INSERT OR REPLACE INTO %s (%s) VALUES (%s)",
-				quoteIdentifier(dataTableName),
-				strings.Join(columns, ", "),
-				strings.Join(placeholders, ", "))
-
-			_, err = tx.ExecContext(ctx, sql, values...)
-			if err != nil {
-				return fmt.Errorf("failed to execute UPSERT oplog entry index %d for ID %s (%s): %w", entry.Index, pkValue, sql, err)
-			}
-
-		case pb.OplogEntry_DELETE:
-			sql := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", quoteIdentifier(dataTableName), quoteIdentifier(pkColumn))
-
-			_, err = tx.ExecContext(ctx, sql, pkValue)
-			if err != nil {
-				return fmt.Errorf("failed to execute DELETE oplog entry index %d for ID %s (%s): %w", entry.Index, pkValue, sql, err)
-			}
-		default:
-			// Ignore unknown operation types
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction after applying oplog entries: %w", err)
-	}
-
-	return nil
-}
-
-func valueFromProto(v *structpb.Value) any {
-	switch k := v.Kind.(type) {
-	case *structpb.Value_NullValue:
-		return nil
-	case *structpb.Value_NumberValue:
-		return k.NumberValue
-	case *structpb.Value_StringValue:
-		return k.StringValue
-	case *structpb.Value_BoolValue:
-		return k.BoolValue
-	case *structpb.Value_StructValue:
-		jsonBytes, err := k.StructValue.MarshalJSON()
-		if err != nil {
-			return nil
-		}
-		return string(jsonBytes)
-	case *structpb.Value_ListValue:
-		jsonBytes, err := k.ListValue.MarshalJSON()
-		if err != nil {
-			return nil
-		}
-		return string(jsonBytes)
-	default:
-		return nil
-	}
-}
-
-func quoteIdentifier(name string) string {
-	return "\"" + name + "\""
 }
 
 // StopDbUpdates signals all running update goroutines to stop and waits for them to finish.
@@ -430,11 +342,11 @@ func (c *Client) Query(ctx context.Context, collectionName string, query string,
 		return nil, fmt.Errorf("collection '%s' not found or not configured", collectionName)
 	}
 
-	if state.db == nil {
+	if state.sqlite == nil {
 		return nil, fmt.Errorf("database connection for collection '%s' is not available", collectionName)
 	}
 
-	rows, err := state.db.QueryContext(ctx, query, args...)
+	rows, err := state.sqlite.query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query on collection '%s': %w", collectionName, err)
 	}
