@@ -8,22 +8,22 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nrjais/emcache/internal/config"
+	"github.com/nrjais/emcache/internal/db"
 	"github.com/nrjais/emcache/internal/leader"
-	"github.com/nrjais/emcache/internal/shape"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
 func ManageCollection(
 	ctx context.Context,
 	wg *sync.WaitGroup,
-	collectionName string,
-	collShape shape.Shape,
+	replicatedColl db.ReplicatedCollection,
 	pgPool *pgxpool.Pool,
 	mongoClient *mongo.Client,
 	mongoDBName string,
 	leaderElector *leader.LeaderElector,
 	cfg *config.Config,
 ) {
+	collectionName := replicatedColl.CollectionName
 	defer wg.Done()
 
 	var roleCtx context.Context
@@ -82,7 +82,7 @@ func ManageCollection(
 				if currentRole == "leader" {
 					log.Printf("[%s] Starting leader change stream listener (Mongo->Postgres).", collectionName)
 					roleCtx, roleCancel = context.WithCancel(ctx)
-					go leader.StartChangeStreamListener(roleCtx, pgPool, mongoClient, mongoDBName, collectionName, collShape, &cfg.LeaderOptions)
+					go leader.StartChangeStreamListener(roleCtx, pgPool, mongoClient, mongoDBName, replicatedColl, &cfg.LeaderOptions)
 				} else {
 					log.Printf("[%s] Instance is a follower.", collectionName)
 					roleCancel = func() {}

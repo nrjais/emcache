@@ -75,7 +75,7 @@ func main() {
 
 	startSnapshotCleanup(bgTaskCtx, &wg, cfg)
 
-	grpcServer := startGRPCServer(&wg, pgPool, cfg)
+	grpcServer := startGRPCServer(&wg, pgPool, cfg, collectionCacheManager)
 
 	waitForShutdownSignal()
 	log.Println("Shutting down server...")
@@ -159,14 +159,14 @@ func startSnapshotCleanup(ctx context.Context, wg *sync.WaitGroup, cfg *config.C
 	go snapshot.StartCleanupLoop(ctx, wg, snapshotTTL, cfg.SQLiteDir)
 }
 
-func startGRPCServer(wg *sync.WaitGroup, pgPool *pgxpool.Pool, cfg *config.Config) *grpc.Server {
+func startGRPCServer(wg *sync.WaitGroup, pgPool *pgxpool.Pool, cfg *config.Config, collectionCacheManager *collectioncache.Manager) *grpc.Server {
 	lis, err := net.Listen("tcp", cfg.GRPCPort)
 	if err != nil {
 		log.Printf("CRITICAL: Failed to listen on port %s: %v. gRPC server not started.", cfg.GRPCPort, err)
 		return nil
 	}
 
-	grpcServerImpl := grpcapi.NewEmcacheServer(pgPool, cfg.SQLiteDir)
+	grpcServerImpl := grpcapi.NewEmcacheServer(pgPool, cfg.SQLiteDir, collectionCacheManager)
 	s := grpc.NewServer()
 	pb.RegisterEmcacheServiceServer(s, grpcServerImpl)
 	reflection.Register(s)

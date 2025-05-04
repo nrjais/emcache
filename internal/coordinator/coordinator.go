@@ -110,7 +110,7 @@ func (c *Coordinator) startManaging(parentCtx context.Context, replicatedColl db
 	c.managedCollections[collectionName] = collCancel
 
 	c.wg.Add(1)
-	go manager.ManageCollection(collCtx, c.wg, collectionName, replicatedColl.Shape, c.pgPool, c.mongoClient, c.mongoDBName, c.leaderElector, c.cfg)
+	go manager.ManageCollection(collCtx, c.wg, replicatedColl, c.pgPool, c.mongoClient, c.mongoDBName, c.leaderElector, c.cfg)
 }
 
 func (c *Coordinator) stopManaging(collectionName string) {

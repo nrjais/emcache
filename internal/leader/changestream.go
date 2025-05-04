@@ -61,10 +61,10 @@ func StartChangeStreamListener(
 	pool *pgxpool.Pool,
 	mongoClient *mongo.Client,
 	dbName string,
-	collectionName string,
-	collShape shape.Shape,
+	replicatedColl db.ReplicatedCollection,
 	cfg *config.LeaderConfig,
 ) {
+	collectionName := replicatedColl.CollectionName
 	log.Printf("[Leader:%s] Starting change stream listener...", collectionName)
 
 	resumeTokenUpdateInterval := time.Duration(cfg.ResumeTokenUpdateIntervalSecs) * time.Second
@@ -80,7 +80,7 @@ func StartChangeStreamListener(
 		default:
 		}
 
-		err := processStream(ctx, pool, mongoClient, dbName, collectionName, collShape, resumeTokenUpdateInterval, cfg.InitialScanBatchSize)
+		err := processStream(ctx, pool, mongoClient, dbName, replicatedColl, resumeTokenUpdateInterval, cfg.InitialScanBatchSize)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				log.Printf("[Leader:%s] Context cancelled during stream processing.", collectionName)
@@ -104,16 +104,16 @@ func processStream(
 	pool *pgxpool.Pool,
 	mongoClient *mongo.Client,
 	dbName string,
-	collectionName string,
-	collShape shape.Shape,
+	replicatedColl db.ReplicatedCollection,
 	resumeTokenUpdateInterval time.Duration,
 	initialScanBatchSize int,
 ) error {
+	collectionName := replicatedColl.CollectionName
 	coll := mongoClient.Database(dbName).Collection(collectionName)
 	var stream *mongo.ChangeStream
 	var err error
 	var currentToken bson.Raw
-	var currentVersion int
+	currentVersion := replicatedColl.CurrentVersion
 
 	tokenStr, found, err := db.GetResumeToken(ctx, pool, collectionName)
 	if err != nil {
@@ -146,11 +146,6 @@ func processStream(
 		currentVersion = newVersion
 		log.Printf("[Leader:%s] Initial scan required. Incremented version to %d.", collectionName, currentVersion)
 	} else {
-		existingVersion, err := db.GetCurrentCollectionVersion(ctx, pool, collectionName)
-		if err != nil {
-			return fmt.Errorf("failed to get current collection version for resuming stream: %w", err)
-		}
-		currentVersion = existingVersion
 		log.Printf("[Leader:%s] Resuming stream for version %d.", collectionName, currentVersion)
 	}
 
@@ -192,7 +187,7 @@ func processStream(
 			log.Printf("[Leader:%s] Warning: Could not get initial resume token before scan. There's a small chance of missing events.", collectionName)
 		}
 
-		if err := performInitialScan(ctx, pool, coll, collectionName, currentVersion, collShape, initialScanBatchSize); err != nil {
+		if err := performInitialScan(ctx, pool, coll, collectionName, currentVersion, replicatedColl.Shape, initialScanBatchSize); err != nil {
 			return fmt.Errorf("initial collection scan failed: %w", err)
 		}
 		log.Printf("[Leader:%s] Initial collection scan completed for version %d.", collectionName, currentVersion)
@@ -215,7 +210,7 @@ func processStream(
 
 		currentToken = stream.ResumeToken()
 
-		if err := processChangeEvent(ctx, pool, event, collectionName, currentVersion, collShape); err != nil {
+		if err := processChangeEvent(ctx, pool, event, collectionName, currentVersion, replicatedColl.Shape); err != nil {
 			log.Printf("[Leader:%s] Failed to process change event: %v. Event: %v", collectionName, err, event)
 			return fmt.Errorf("failed to process change event: %w", err)
 		}

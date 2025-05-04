@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nrjais/emcache/internal/collectioncache"
 	"github.com/nrjais/emcache/internal/db"
 	"github.com/nrjais/emcache/internal/follower"
 	"github.com/nrjais/emcache/internal/shape"
@@ -32,12 +33,14 @@ type server struct {
 	pb.UnimplementedEmcacheServiceServer
 	pgPool    *pgxpool.Pool
 	sqliteDir string
+	collCache *collectioncache.Manager
 }
 
-func NewEmcacheServer(pgPool *pgxpool.Pool, sqliteBaseDir string) pb.EmcacheServiceServer {
+func NewEmcacheServer(pgPool *pgxpool.Pool, sqliteBaseDir string, collCache *collectioncache.Manager) pb.EmcacheServiceServer {
 	return &server{
 		pgPool:    pgPool,
 		sqliteDir: sqliteBaseDir,
+		collCache: collCache,
 	}
 }
 
@@ -65,15 +68,12 @@ func (s *server) DownloadDb(req *pb.DownloadDbRequest, stream pb.EmcacheService_
 		log.Printf("Client requested unsupported compression %s for %s, falling back to NONE.", requestedCompression, collectionName)
 	}
 
-	currentVersion, err := db.GetCurrentCollectionVersion(ctx, s.pgPool, collectionName)
-	if err != nil {
-		log.Printf("Error getting current version for %s: %v", collectionName, err)
-		if err.Error() == fmt.Sprintf("collection '%s' not found in replicated_collections", collectionName) {
-			return status.Errorf(codes.NotFound, "Collection %s not configured for replication", collectionName)
-		}
+	replicatedColl, found := s.collCache.GetCollectionRefresh(ctx, collectionName)
+	if !found {
+		log.Printf("CRITICAL: Collection '%s' not found in cache. Collection might have been removed.", collectionName)
 		return status.Error(codes.Internal, "Failed to get current collection version")
 	}
-
+	currentVersion := replicatedColl.CurrentVersion
 	dbPath := follower.GetCollectionDBPath(collectionName, s.sqliteDir, currentVersion)
 
 	snapshotPath, cleanupSnapshot, err := snapshot.GetOrGenerateSnapshot(ctx, dbPath)

@@ -153,19 +153,6 @@ func GetOplogEntriesGlobal(ctx context.Context, pool *pgxpool.Pool, afterID int6
 	return entries, nil
 }
 
-func GetCurrentCollectionVersion(ctx context.Context, pool *pgxpool.Pool, collectionName string) (int, error) {
-	var version int
-	sql := `SELECT current_version FROM replicated_collections WHERE collection_name = $1`
-	err := pool.QueryRow(ctx, sql, collectionName).Scan(&version)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return 0, fmt.Errorf("collection '%s' not found in replicated_collections", collectionName)
-		}
-		return 0, fmt.Errorf("failed to query current version for collection '%s': %w", collectionName, err)
-	}
-	return version, nil
-}
-
 func IncrementCollectionVersion(ctx context.Context, pool *pgxpool.Pool, collectionName string) (int, error) {
 	var newVersion int
 	sql := `
@@ -234,33 +221,6 @@ type ReplicatedCollection struct {
 	CollectionName string
 	CurrentVersion int
 	Shape          shape.Shape
-}
-
-func GetReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collectionName string) (*ReplicatedCollection, error) {
-	var rc ReplicatedCollection
-	var shapeJSON []byte
-
-	sql := `SELECT collection_name, current_version, shape
-           FROM replicated_collections
-           WHERE collection_name = $1`
-
-	err := pool.QueryRow(ctx, sql, collectionName).Scan(&rc.CollectionName, &rc.CurrentVersion, &shapeJSON)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, fmt.Errorf("collection '%s' %w", collectionName, ErrCollectionNotFound)
-		}
-		return nil, fmt.Errorf("failed to query replicated collection '%s': %w", collectionName, err)
-	}
-
-	if shapeJSON != nil {
-		rc.Shape = shape.Shape{}
-		if err := json.Unmarshal(shapeJSON, &rc.Shape); err != nil {
-			log.Printf("CRITICAL: Failed to unmarshal shape JSON from DB for collection '%s': %v", collectionName, err)
-			return nil, fmt.Errorf("failed to unmarshal shape for collection '%s': %w", collectionName, err)
-		}
-	}
-
-	return &rc, nil
 }
 
 func AddReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collectionName string, shapeJSON []byte) error {
