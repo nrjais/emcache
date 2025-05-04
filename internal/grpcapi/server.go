@@ -144,6 +144,31 @@ func (s *server) GetOplogEntries(ctx context.Context, req *pb.GetOplogEntriesReq
 	return &pb.GetOplogEntriesResponse{Entries: pbEntries}, nil
 }
 
+// GetCollections returns a list of all collections currently configured for replication.
+func (s *server) GetCollections(ctx context.Context, req *pb.GetCollectionsRequest) (*pb.GetCollectionsResponse, error) {
+	log.Printf("gRPC GetCollections request")
+
+	internalCollections, err := db.GetAllReplicatedCollectionsWithShapes(ctx, s.pgPool)
+	if err != nil {
+		log.Printf("Error fetching all replicated collections with shapes: %v", err)
+		return nil, status.Error(codes.Internal, "Failed to fetch collection list")
+	}
+
+	pbCollections := make([]*pb.Collection, 0, len(internalCollections))
+	for _, coll := range internalCollections {
+		pbColl := &pb.Collection{
+			Name:    coll.CollectionName,
+			Version: int32(coll.CurrentVersion),
+			Shape:   convertInternalShapeToProto(coll.Shape),
+		}
+		pbCollections = append(pbCollections, pbColl)
+	}
+
+	log.Printf("Returning %d collections", len(pbCollections))
+
+	return &pb.GetCollectionsResponse{Collections: pbCollections}, nil
+}
+
 func (s *server) AddCollection(ctx context.Context, req *pb.AddCollectionRequest) (*pb.AddCollectionResponse, error) {
 	collectionName := req.GetCollectionName()
 	if collectionName == "" {
@@ -223,7 +248,7 @@ func (s *server) RemoveCollection(ctx context.Context, req *pb.RemoveCollectionR
 }
 
 func convertDbOplogToProto(entry db.OplogEntry) (*pb.OplogEntry, error) {
-	pbOpType := pb.OplogEntry_OPERATION_TYPE_UNSPECIFIED
+	pbOpType := pb.OplogEntry_UPSERT
 	switch entry.Operation {
 	case "UPSERT":
 		pbOpType = pb.OplogEntry_UPSERT
@@ -323,4 +348,56 @@ func convertProtoShapeToInternal(ps *pb.Shape) (shape.Shape, error) {
 	}
 
 	return internalShape, nil
+}
+
+func convertInternalDataTypeToProto(dt shape.DataType) pb.DataType {
+	switch dt {
+	case shape.JSONB:
+		return pb.DataType_JSONB
+	case shape.Bool:
+		return pb.DataType_BOOL
+	case shape.Number:
+		return pb.DataType_NUMBER
+	case shape.Integer:
+		return pb.DataType_INTEGER
+	case shape.Text:
+		return pb.DataType_TEXT
+	case shape.Any:
+		fallthrough // Treat Any as Any
+	default:
+		return pb.DataType_ANY
+	}
+}
+
+func convertInternalColumnToProto(ic shape.Column) *pb.Column {
+	return &pb.Column{
+		Name: ic.Name,
+		Type: convertInternalDataTypeToProto(ic.Type),
+		Path: ic.Path,
+	}
+}
+
+func convertInternalIndexToProto(ii shape.Index) *pb.Index {
+	cols := make([]string, len(ii.Columns))
+	copy(cols, ii.Columns)
+	return &pb.Index{
+		Columns: cols,
+	}
+}
+
+func convertInternalShapeToProto(is shape.Shape) *pb.Shape {
+	protoShape := &pb.Shape{
+		Columns: make([]*pb.Column, 0, len(is.Columns)),
+		Indexes: make([]*pb.Index, 0, len(is.Indexes)),
+	}
+
+	for _, ic := range is.Columns {
+		protoShape.Columns = append(protoShape.Columns, convertInternalColumnToProto(ic))
+	}
+
+	for _, ii := range is.Indexes {
+		protoShape.Indexes = append(protoShape.Indexes, convertInternalIndexToProto(ii))
+	}
+
+	return protoShape
 }

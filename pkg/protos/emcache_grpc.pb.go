@@ -19,6 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	EmcacheService_GetCollections_FullMethodName   = "/emcache.EmcacheService/GetCollections"
 	EmcacheService_DownloadDb_FullMethodName       = "/emcache.EmcacheService/DownloadDb"
 	EmcacheService_GetOplogEntries_FullMethodName  = "/emcache.EmcacheService/GetOplogEntries"
 	EmcacheService_AddCollection_FullMethodName    = "/emcache.EmcacheService/AddCollection"
@@ -29,6 +30,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type EmcacheServiceClient interface {
+	GetCollections(ctx context.Context, in *GetCollectionsRequest, opts ...grpc.CallOption) (*GetCollectionsResponse, error)
 	DownloadDb(ctx context.Context, in *DownloadDbRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DownloadDbResponse], error)
 	GetOplogEntries(ctx context.Context, in *GetOplogEntriesRequest, opts ...grpc.CallOption) (*GetOplogEntriesResponse, error)
 	AddCollection(ctx context.Context, in *AddCollectionRequest, opts ...grpc.CallOption) (*AddCollectionResponse, error)
@@ -41,6 +43,16 @@ type emcacheServiceClient struct {
 
 func NewEmcacheServiceClient(cc grpc.ClientConnInterface) EmcacheServiceClient {
 	return &emcacheServiceClient{cc}
+}
+
+func (c *emcacheServiceClient) GetCollections(ctx context.Context, in *GetCollectionsRequest, opts ...grpc.CallOption) (*GetCollectionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCollectionsResponse)
+	err := c.cc.Invoke(ctx, EmcacheService_GetCollections_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *emcacheServiceClient) DownloadDb(ctx context.Context, in *DownloadDbRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DownloadDbResponse], error) {
@@ -96,6 +108,7 @@ func (c *emcacheServiceClient) RemoveCollection(ctx context.Context, in *RemoveC
 // All implementations must embed UnimplementedEmcacheServiceServer
 // for forward compatibility.
 type EmcacheServiceServer interface {
+	GetCollections(context.Context, *GetCollectionsRequest) (*GetCollectionsResponse, error)
 	DownloadDb(*DownloadDbRequest, grpc.ServerStreamingServer[DownloadDbResponse]) error
 	GetOplogEntries(context.Context, *GetOplogEntriesRequest) (*GetOplogEntriesResponse, error)
 	AddCollection(context.Context, *AddCollectionRequest) (*AddCollectionResponse, error)
@@ -110,6 +123,9 @@ type EmcacheServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedEmcacheServiceServer struct{}
 
+func (UnimplementedEmcacheServiceServer) GetCollections(context.Context, *GetCollectionsRequest) (*GetCollectionsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCollections not implemented")
+}
 func (UnimplementedEmcacheServiceServer) DownloadDb(*DownloadDbRequest, grpc.ServerStreamingServer[DownloadDbResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method DownloadDb not implemented")
 }
@@ -141,6 +157,24 @@ func RegisterEmcacheServiceServer(s grpc.ServiceRegistrar, srv EmcacheServiceSer
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&EmcacheService_ServiceDesc, srv)
+}
+
+func _EmcacheService_GetCollections_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCollectionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EmcacheServiceServer).GetCollections(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EmcacheService_GetCollections_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EmcacheServiceServer).GetCollections(ctx, req.(*GetCollectionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _EmcacheService_DownloadDb_Handler(srv interface{}, stream grpc.ServerStream) error {
@@ -215,6 +249,10 @@ var EmcacheService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "emcache.EmcacheService",
 	HandlerType: (*EmcacheServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetCollections",
+			Handler:    _EmcacheService_GetCollections_Handler,
+		},
 		{
 			MethodName: "GetOplogEntries",
 			Handler:    _EmcacheService_GetOplogEntries_Handler,
