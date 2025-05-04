@@ -60,7 +60,7 @@ message Collection {
 enum Compression {
   NONE = 0;
   ZSTD = 1;
-  BROTLI = 2;
+  GZIP = 2;
 }
 
 message DownloadDbRequest {
@@ -71,6 +71,7 @@ message DownloadDbRequest {
 message DownloadDbResponse {
   int32 version = 1;
   bytes chunk = 2;
+  Compression compression = 3;
 }
 
 message GetOplogEntriesRequest {

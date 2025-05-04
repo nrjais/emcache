@@ -77,16 +77,17 @@ func (s *server) DownloadDb(req *pb.DownloadDbRequest, stream pb.EmcacheService_
 	}
 	defer file.Close()
 
-	if err := stream.Send(&pb.DownloadDbResponse{Version: int32(currentVersion)}); err != nil {
+	if err := stream.Send(&pb.DownloadDbResponse{Version: int32(currentVersion), Compression: pb.Compression_NONE}); err != nil {
 		log.Printf("Error sending DB version for collection %s: %v", collectionName, err)
 		return status.Errorf(codes.Internal, "Failed to send database version")
 	}
 
-	buffer := make([]byte, 1024*1024)
+	buffer := make([]byte, 1024*1024*5)
 	for {
 		n, err := file.Read(buffer)
 		if n > 0 {
-			if err := stream.Send(&pb.DownloadDbResponse{Chunk: buffer[:n]}); err != nil {
+			data := &pb.DownloadDbResponse{Chunk: buffer[:n]}
+			if err := stream.Send(data); err != nil {
 				log.Printf("Error sending DB chunk for collection %s: %v", collectionName, err)
 				return status.Errorf(codes.Internal, "Failed to stream database chunk")
 			}

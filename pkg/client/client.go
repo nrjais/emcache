@@ -190,39 +190,34 @@ func (c *Client) close() error {
 }
 
 func (c *Client) downloadDbForCollection(ctx context.Context, collectionName string, writer io.Writer) (int32, error) {
-	req := &pb.DownloadDbRequest{CollectionName: collectionName}
-	stream, err := c.grpcClient.DownloadDb(ctx, req)
+	reqComp := pb.Compression_ZSTD
+	stream, err := c.grpcClient.DownloadDb(ctx, &pb.DownloadDbRequest{CollectionName: collectionName, Compression: reqComp})
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to start download stream: %w", err)
 	}
 
-	var dbVersion int32 = -1
-	firstChunk := true
-
-	for {
-		resp, err := stream.Recv()
+	resp, err := stream.Recv()
+	if err != nil {
 		if err == io.EOF {
-			return dbVersion, nil
+			return 0, fmt.Errorf("received empty stream")
 		}
-		if err != nil {
-			return dbVersion, err
-		}
-
-		if firstChunk {
-			dbVersion = resp.GetVersion()
-			firstChunk = false
-		}
-
-		chunk := resp.GetChunk()
-		n, err := writer.Write(chunk)
-		if err != nil {
-			_ = stream.CloseSend()
-			return dbVersion, err
-		}
-		if n != len(chunk) {
-			return dbVersion, fmt.Errorf("short write to writer (%d bytes written, %d bytes chunk)", n, len(chunk))
-		}
+		return 0, fmt.Errorf("error receiving first download chunk: %w", err)
 	}
+	_ = stream.CloseSend()
+
+	resComp := resp.GetCompression()
+	firstChunkData := resp.GetChunk()
+
+	if resComp != reqComp && resComp != pb.Compression_NONE {
+		return 0, fmt.Errorf("server sent compression %s, but %s was requested", resComp, reqComp)
+	}
+
+	err = decompressStream(stream, firstChunkData, resComp, writer)
+	if err != nil {
+		return 0, fmt.Errorf("decompression failed: %w", err)
+	}
+
+	return resp.GetVersion(), nil
 }
 
 func (c *Client) getOplogEntries(ctx context.Context, collectionNames []string, afterIndex int64) (*pb.GetOplogEntriesResponse, error) {
