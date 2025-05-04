@@ -10,6 +10,7 @@ import (
 	"github.com/nrjais/emcache/internal/config"
 	"github.com/nrjais/emcache/internal/db"
 	"github.com/nrjais/emcache/internal/leader"
+	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -34,24 +35,24 @@ func ManageCollection(
 
 	log.Printf("[%s] Starting management routine", collectionName)
 
-	const checkInterval = 5 * time.Second
-	timer := time.NewTimer(checkInterval)
+	leaseDuration := time.Duration(cfg.LeaderOptions.LeaseDurationSecs) * time.Second
 
 	for {
 		select {
 		case <-ctx.Done():
 			log.Printf("[%s] Management context cancelled. Stopping.", collectionName)
-			timer.Stop()
+			leaderElector.Release(collectionName)
+			roleCancel()
 			return
 
-		case <-timer.C:
+		case <-time.After(leaseDuration / 2):
 			isLeaderNow := false
 			var acquireErr error
-			if leaderElector.IsLeader(collectionName) {
+			if leaderElector.IsLeader(collectionName, leaseDuration) {
 				isLeaderNow = true
 			} else {
 				var acquired bool
-				acquired, acquireErr = leaderElector.TryAcquire(ctx, collectionName)
+				acquired, acquireErr = leaderElector.TryAcquire(ctx, collectionName, leaseDuration)
 				if acquireErr != nil {
 					log.Printf("[%s] Error trying to acquire leadership: %v", collectionName, acquireErr)
 				} else if acquired {
@@ -59,18 +60,7 @@ func ManageCollection(
 				}
 			}
 
-			desiredRole := "follower"
-			if isLeaderNow {
-				desiredRole = "leader"
-			}
-
-			if currentRole == "leader" && roleCtx != nil && roleCtx.Err() != nil {
-				log.Printf("[%s] Detected ended context for leader role (Error: %v). Forcing role re-evaluation.", collectionName, roleCtx.Err())
-				roleCancel()
-				roleCancel = func() {}
-				currentRole = ""
-				roleCtx = nil
-			}
+			desiredRole := lo.If(isLeaderNow, "leader").Else("follower")
 
 			if desiredRole != currentRole {
 				log.Printf("[%s] Transitioning role from '%s' to '%s'", collectionName, currentRole, desiredRole)
@@ -89,8 +79,6 @@ func ManageCollection(
 					roleCtx = nil
 				}
 			}
-
-			timer.Reset(checkInterval)
 		}
 	}
 }

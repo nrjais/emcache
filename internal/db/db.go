@@ -238,7 +238,7 @@ func AddReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collection
 
 	sql := `
         INSERT INTO replicated_collections (collection_name, shape, current_version)
-        VALUES ($1, $2, 1)`
+        VALUES ($1, $2, 0)`
 
 	_, err = pool.Exec(ctx, sql, collectionName, shapeJSON)
 	if err != nil {

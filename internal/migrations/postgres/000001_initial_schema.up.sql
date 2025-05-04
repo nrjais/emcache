@@ -25,3 +25,10 @@ CREATE TABLE replicated_collections (
     current_version INT NOT NULL DEFAULT 1,
     shape JSONB NOT NULL
 );
+
+-- Table for storing the leader locks
+CREATE TABLE IF NOT EXISTS leader_locks (
+    collection_name VARCHAR(255) PRIMARY KEY,
+    leader_id VARCHAR(255),
+    lease_expires_at TIMESTAMPTZ
+);

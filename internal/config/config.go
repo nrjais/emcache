@@ -26,8 +26,9 @@ type CoordinatorConfig struct {
 }
 
 type LeaderConfig struct {
-	ResumeTokenUpdateIntervalSecs int `mapstructure:"resume_token_update_interval_secs" validate:"min=1"`
-	InitialScanBatchSize          int `mapstructure:"initial_scan_batch_size" validate:"min=1"`
+	ResumeTokenUpdateIntervalSecs int   `mapstructure:"resume_token_update_interval_secs" validate:"min=1"`
+	InitialScanBatchSize          int   `mapstructure:"initial_scan_batch_size" validate:"min=1"`
+	LeaseDurationSecs             int64 `mapstructure:"lease_duration_secs" validate:"min=1"`
 }
 
 type FollowerConfig struct {
@@ -51,6 +52,7 @@ func Load() *Config {
 	v.SetDefault("coordinator.collection_refresh_interval_secs", 60)
 	v.SetDefault("leader.resume_token_update_interval_secs", 10)
 	v.SetDefault("leader.initial_scan_batch_size", 1000)
+	v.SetDefault("leader.lease_duration_secs", 30)
 	v.SetDefault("follower.poll_interval_secs", 2)
 	v.SetDefault("follower.batch_size", 100)
 	v.SetDefault("follower.cleanup_interval_secs", 300)

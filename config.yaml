@@ -27,6 +27,8 @@ leader:
   resume_token_update_interval_secs: 1
   # How many documents to fetch at once during initial collection scan
   initial_scan_batch_size: 1000
+  # How long the leader should hold the lease (seconds)
+  lease_duration_secs: 5
 
 # Optional: Follower operation settings
 follower:

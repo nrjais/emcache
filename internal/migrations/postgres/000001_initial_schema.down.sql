@@ -3,3 +3,4 @@
 DROP TABLE IF EXISTS replicated_collections;
 DROP TABLE IF EXISTS oplog;
 DROP TABLE IF EXISTS resume_tokens;
+DROP TABLE IF EXISTS leader_locks;
