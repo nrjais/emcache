@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"strings"
@@ -50,6 +49,21 @@ func (s *server) DownloadDb(req *pb.DownloadDbRequest, stream pb.EmcacheService_
 	log.Printf("gRPC DownloadDb request for collection: %s", collectionName)
 
 	ctx := stream.Context()
+	requestedCompression := req.GetCompression()
+	responseCompression := pb.Compression_NONE
+
+	switch requestedCompression {
+	case pb.Compression_ZSTD:
+		responseCompression = pb.Compression_ZSTD
+		log.Printf("Client requested ZSTD compression for %s, using ZSTD.", collectionName)
+	case pb.Compression_GZIP:
+		responseCompression = pb.Compression_GZIP
+		log.Printf("Client requested GZIP compression for %s, using GZIP.", collectionName)
+	case pb.Compression_NONE:
+		log.Printf("Client requested no compression for %s.", collectionName)
+	default:
+		log.Printf("Client requested unsupported compression %s for %s, falling back to NONE.", requestedCompression, collectionName)
+	}
 
 	currentVersion, err := db.GetCurrentCollectionVersion(ctx, s.pgPool, collectionName)
 	if err != nil {
@@ -77,28 +91,15 @@ func (s *server) DownloadDb(req *pb.DownloadDbRequest, stream pb.EmcacheService_
 	}
 	defer file.Close()
 
-	if err := stream.Send(&pb.DownloadDbResponse{Version: int32(currentVersion), Compression: pb.Compression_NONE}); err != nil {
+	if err := stream.Send(&pb.DownloadDbResponse{Version: int32(currentVersion), Compression: responseCompression}); err != nil {
 		log.Printf("Error sending DB version for collection %s: %v", collectionName, err)
 		return status.Errorf(codes.Internal, "Failed to send database version")
 	}
 
-	buffer := make([]byte, 1024*1024*5)
-	for {
-		n, err := file.Read(buffer)
-		if n > 0 {
-			data := &pb.DownloadDbResponse{Chunk: buffer[:n]}
-			if err := stream.Send(data); err != nil {
-				log.Printf("Error sending DB chunk for collection %s: %v", collectionName, err)
-				return status.Errorf(codes.Internal, "Failed to stream database chunk")
-			}
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			log.Printf("Error reading from snapshot file %s: %v", snapshotPath, err)
-			return status.Errorf(codes.Internal, "Failed to read database snapshot")
-		}
+	chunkSize := 1024 * 1024 * 5 // 5MB chunks
+	if err := compressAndSendStream(file, stream, responseCompression, chunkSize); err != nil {
+		log.Printf("Error streaming DB for collection %s (compression: %s): %v", collectionName, responseCompression, err)
+		return status.Errorf(codes.Internal, "Failed to stream database content")
 	}
 
 	log.Printf("Finished streaming DB for collection: %s", collectionName)
