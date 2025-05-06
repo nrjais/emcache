@@ -44,6 +44,11 @@ func NewMainFollower(pgPool *pgxpool.Pool, cacheMgr *collectioncache.Manager, sq
 	batchSize := cfg.FollowerOptions.BatchSize
 
 	cleanupInterval := time.Duration(cfg.FollowerOptions.CleanupIntervalSecs) * time.Second
+
+	if err := os.MkdirAll(sqliteBaseDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create base SQLite directory: %w", err)
+	}
+
 	metaDBPath := filepath.Join(sqliteBaseDir, "meta.sqlite")
 	metaDB, err := sqlite.OpenConn(metaDBPath, sqlite.OpenReadWrite, sqlite.OpenWAL, sqlite.OpenCreate)
 	if err != nil {
@@ -285,42 +290,46 @@ func (cf *MainFollower) cleanupOldFiles() error {
 		currentVersionMap[coll.CollectionName] = coll.CurrentVersion
 	}
 
-	files, err := os.ReadDir(cf.sqliteBaseDir)
+	replicasDir := filepath.Join(cf.sqliteBaseDir, "replicas")
+
+	if _, err := os.Stat(replicasDir); os.IsNotExist(err) {
+		return nil
+	}
+
+	replicas, err := os.ReadDir(replicasDir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to read sqlite directory %s: %w", cf.sqliteBaseDir, err)
+		return fmt.Errorf("failed to read collections directory %s: %w", replicasDir, err)
 	}
 
 	deletedCount := 0
-	for _, file := range files {
-		if file.IsDir() || !strings.HasSuffix(file.Name(), ".sqlite") {
-			continue
-		}
-		fileName := file.Name()
-		dbKey, collNameFromFile, versionFromFile := parseDBFileName(fileName)
-		if dbKey == "" {
-			continue
-		}
 
-		currentVersion, collectionExistsInCache := currentVersionMap[collNameFromFile]
-		stale := !collectionExistsInCache || (collectionExistsInCache && versionFromFile != currentVersion)
+	for _, replica := range replicas {
+		if !replica.IsDir() {
+			continue
+		}
+		deletedCount := 0
+
+		replicaName := replica.Name()
+		replicaPath := filepath.Join(replicasDir, replicaName)
+		collectionName, version := parseDBDirName(replicaName)
+
+		currentVersion, collectionExistsInCache := currentVersionMap[collectionName]
+		stale := !collectionExistsInCache || (collectionExistsInCache && version < currentVersion)
 
 		if stale {
-			log.Printf("[MainFollower:Cleanup] Deleting stale file: %s (Current version for '%s' in cache is %d, collection exists in cache=%t)", fileName, collNameFromFile, currentVersion, collectionExistsInCache)
+			log.Printf("[MainFollower:Cleanup] Deleting stale file: %s (Current version for '%s' in cache is %d, collection exists in cache=%t)",
+				replicaPath, collectionName, currentVersion, collectionExistsInCache)
 
 			cf.connMutex.Lock()
-			if conn, exists := cf.connections[dbKey]; exists {
-				log.Printf("[MainFollower:Cleanup] Closing connection for %s before deleting file.", dbKey)
+			if conn, exists := cf.connections[replicaName]; exists {
+				log.Printf("[MainFollower:Cleanup] Closing connection for %s before deleting file.", replicaName)
 				conn.conn.Close()
-				delete(cf.connections, dbKey)
+				delete(cf.connections, replicaName)
 			}
 			cf.connMutex.Unlock()
 
-			fullPath := filepath.Join(cf.sqliteBaseDir, fileName)
-			if err := os.Remove(fullPath); err != nil {
-				log.Printf("[MainFollower:Cleanup] Failed to delete file %s: %v", fullPath, err)
+			if err := os.RemoveAll(replicaPath); err != nil {
+				log.Printf("[MainFollower:Cleanup] Failed to delete file %s: %v", replicaPath, err)
 			} else {
 				deletedCount++
 			}
@@ -334,12 +343,8 @@ func (cf *MainFollower) cleanupOldFiles() error {
 	return nil
 }
 
-func parseDBFileName(fileName string) (dbKey, collectionName string, version int) {
-	if !strings.HasSuffix(fileName, ".sqlite") {
-		return
-	}
-	baseName := strings.TrimSuffix(fileName, ".sqlite")
-	parts := strings.Split(baseName, "_v")
+func parseDBDirName(dirName string) (collectionName string, version int) {
+	parts := strings.Split(dirName, "_v")
 	if len(parts) != 2 {
 		return
 	}
@@ -349,7 +354,6 @@ func parseDBFileName(fileName string) (dbKey, collectionName string, version int
 	if err != nil {
 		return
 	}
-	dbKey = baseName
 	return
 }
 

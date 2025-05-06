@@ -76,7 +76,8 @@ func (s *server) DownloadDb(req *pb.DownloadDbRequest, stream pb.EmcacheService_
 	currentVersion := replicatedColl.CurrentVersion
 	dbPath := follower.GetCollectionDBPath(collectionName, s.sqliteDir, currentVersion)
 
-	snapshotPath, cleanupSnapshot, err := snapshot.GetOrGenerateSnapshot(ctx, dbPath)
+	snapshotFileName := fmt.Sprintf("%s_v%d.snapshot", collectionName, currentVersion)
+	snapshotPath, cleanupSnapshot, err := snapshot.GetOrGenerateSnapshot(ctx, dbPath, s.sqliteDir, snapshotFileName)
 	if err != nil {
 		log.Printf("Error preparing snapshot for %s (v%d): %v", collectionName, currentVersion, err)
 		return status.Errorf(codes.Internal, "Failed to prepare database snapshot for download")

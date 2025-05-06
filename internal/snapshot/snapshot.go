@@ -13,6 +13,8 @@ import (
 	"zombiezen.com/go/sqlite"
 )
 
+const snapshotDirName = "snapshots"
+
 type snapshotInfo struct {
 	refCount     int
 	creationTime time.Time
@@ -25,8 +27,8 @@ var snapshotManager = struct {
 	snapshots: make(map[string]*snapshotInfo),
 }
 
-func GetOrGenerateSnapshot(ctx context.Context, dbPath string) (snapshotPath string, cleanup func(), err error) {
-	snapshotPath = dbPath + ".snapshot"
+func GetOrGenerateSnapshot(ctx context.Context, dbPath string, baseDir string, snapshotFileName string) (snapshotPath string, cleanup func(), err error) {
+	snapshotPath = filepath.Join(baseDir, snapshotDirName, snapshotFileName)
 
 	snapshotManager.mu.Lock()
 
@@ -125,9 +127,14 @@ func GetOrGenerateSnapshot(ctx context.Context, dbPath string) (snapshotPath str
 	return snapshotPath, cleanupFunc(info), nil
 }
 
-func StartCleanupLoop(ctx context.Context, wg *sync.WaitGroup, ttl time.Duration, snapshotDir string) {
+func StartCleanupLoop(ctx context.Context, wg *sync.WaitGroup, ttl time.Duration, sqliteBaseDir string) {
 	defer wg.Done()
 	log.Printf("[Snapshot] Starting cleanup loop with TTL: %v", ttl)
+
+	snapshotsDir := filepath.Join(sqliteBaseDir, snapshotDirName)
+	if err := os.MkdirAll(snapshotsDir, 0755); err != nil {
+		log.Printf("[Snapshot] Warning: Failed to create snapshots directory: %v", err)
+	}
 
 	checkInterval := ttl / 2
 	ticker := time.NewTicker(checkInterval)
@@ -137,15 +144,15 @@ func StartCleanupLoop(ctx context.Context, wg *sync.WaitGroup, ttl time.Duration
 		select {
 		case <-ctx.Done():
 			log.Println("[Snapshot] Cleanup loop stopping due to context cancellation.")
-			cleanupStaleSnapshots(ttl, snapshotDir)
+			cleanupStaleSnapshots(ttl, snapshotsDir)
 			return
 		case <-ticker.C:
-			cleanupStaleSnapshots(ttl, snapshotDir)
+			cleanupStaleSnapshots(ttl, snapshotsDir)
 		}
 	}
 }
 
-func cleanupStaleSnapshots(ttl time.Duration, snapshotDir string) {
+func cleanupStaleSnapshots(ttl time.Duration, snapshotsDir string) {
 	log.Println("[Snapshot] Running periodic cleanup check...")
 	now := time.Now()
 	deletedCount := 0
@@ -162,7 +169,7 @@ func cleanupStaleSnapshots(ttl time.Duration, snapshotDir string) {
 	}
 
 	snapshotsToDelete := make([]string, 0, len(snapshotManager.snapshots))
-	files, err := os.ReadDir(snapshotDir)
+	files, err := os.ReadDir(snapshotsDir)
 	if err != nil {
 		log.Printf("[Snapshot] Error reading snapshot directory: %v", err)
 	}
@@ -174,18 +181,19 @@ func cleanupStaleSnapshots(ttl time.Duration, snapshotDir string) {
 		if !strings.HasSuffix(file.Name(), ".snapshot") {
 			continue
 		}
-		if _, ok := toKeep[file.Name()]; ok {
+
+		fullPath := filepath.Join(snapshotsDir, file.Name())
+		if _, ok := toKeep[fullPath]; ok {
 			continue
 		}
-		snapshotsToDelete = append(snapshotsToDelete, file.Name())
+		snapshotsToDelete = append(snapshotsToDelete, fullPath)
 	}
 
 	for _, path := range snapshotsToDelete {
-		fullPath := filepath.Join(snapshotDir, path)
-		if rmErr := os.Remove(fullPath); rmErr != nil {
-			log.Printf("[Snapshot] Error deleting snapshot file %s: %v", fullPath, rmErr)
+		if rmErr := os.Remove(path); rmErr != nil {
+			log.Printf("[Snapshot] Error deleting snapshot file %s: %v", path, rmErr)
 		} else {
-			log.Printf("[Snapshot] Deleted stale snapshot file %s", fullPath)
+			log.Printf("[Snapshot] Deleted stale snapshot file %s", path)
 			deletedCount++
 		}
 	}

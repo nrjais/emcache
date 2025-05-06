@@ -24,8 +24,9 @@ const dataTableName = "data"
 var ErrNotFound = errors.New("record not found")
 
 func GetCollectionDBPath(collectionName string, sqliteBaseDir string, version int) string {
-	fileName := fmt.Sprintf("%s_v%d.sqlite", collectionName, version)
-	return filepath.Join(sqliteBaseDir, fileName)
+	collDir := filepath.Join(sqliteBaseDir, "replicas")
+	dirName := fmt.Sprintf("%s_v%d", collectionName, version)
+	return filepath.Join(collDir, dirName, "db.sqlite")
 }
 
 func openCollectionDB(collectionName, sqliteBaseDir, dbPath string, version int, collShape shape.Shape) (*sqlite.Conn, error) {
@@ -36,8 +37,9 @@ func openCollectionDB(collectionName, sqliteBaseDir, dbPath string, version int,
 		return nil, fmt.Errorf("database version must be positive")
 	}
 
-	if err := os.MkdirAll(sqliteBaseDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create directory for SQLite DBs at %s: %w", sqliteBaseDir, err)
+	collDir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(collDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create directory for collection %s at %s: %w", collectionName, collDir, err)
 	}
 
 	conn, err := sqlite.OpenConn(dbPath, sqlite.OpenReadWrite, sqlite.OpenCreate, sqlite.OpenWAL)
