@@ -44,7 +44,7 @@ func NewMainFollower(pgPool *pgxpool.Pool, cacheMgr *collectioncache.Manager, sq
 	batchSize := cfg.FollowerOptions.BatchSize
 
 	cleanupInterval := time.Duration(cfg.FollowerOptions.CleanupIntervalSecs) * time.Second
-	metaDBPath := filepath.Join(sqliteBaseDir, "_emcache_meta.sqlite")
+	metaDBPath := filepath.Join(sqliteBaseDir, "meta.sqlite")
 	metaDB, err := sqlite.OpenConn(metaDBPath, sqlite.OpenReadWrite, sqlite.OpenWAL, sqlite.OpenCreate)
 	if err != nil {
 		log.Printf("[MainFollower] Error opening meta DB: %v", err)

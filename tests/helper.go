@@ -105,7 +105,7 @@ func setupSyncedCollection(t *testing.T, ctx context.Context, numInitialDocs int
 func verifyDocsInSQLite(t *testing.T, client *emclient.Client, collectionName string, expectedDocs map[string]TestDoc) {
 	t.Helper()
 
-	query := "SELECT id, name, age FROM _emcache_data"
+	query := "SELECT id, name, age FROM data"
 	foundDocs := make(map[string]TestDoc)
 
 	rows, err := client.Query(context.Background(), collectionName, query)

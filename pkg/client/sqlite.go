@@ -44,7 +44,7 @@ func (sc *sqliteCollection) applyOplogEntries(ctx context.Context, entries []*pb
 	}
 	defer tx.Rollback()
 
-	const dataTableName = "_emcache_data"
+	const dataTableName = "data"
 
 	for _, entry := range entries {
 		const pkColumn = "id"

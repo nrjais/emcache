@@ -16,10 +16,10 @@ import (
 	"zombiezen.com/go/sqlite/sqlitex"
 )
 
-const metadataTableName = "_emcache_metadata"
+const metadataTableName = "metadata"
 const lastAppliedIdxKey = "last_applied_oplog_idx"
 const dbVersionKey = "db_version"
-const dataTableName = "_emcache_data"
+const dataTableName = "data"
 
 var ErrNotFound = errors.New("record not found")
 
