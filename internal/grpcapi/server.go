@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/nrjais/emcache/internal/shape"
 	"github.com/nrjais/emcache/internal/snapshot"
 	pb "github.com/nrjais/emcache/pkg/protos"
+	"golang.org/x/exp/slog"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -49,7 +49,7 @@ func (s *server) DownloadDb(req *pb.DownloadDbRequest, stream pb.EmcacheService_
 	if collectionName == "" {
 		return status.Error(codes.InvalidArgument, "Collection name cannot be empty")
 	}
-	log.Printf("gRPC DownloadDb request for collection: %s", collectionName)
+	slog.Info("Download request received", "collection", collectionName)
 
 	ctx := stream.Context()
 	requestedCompression := req.GetCompression()
@@ -58,19 +58,19 @@ func (s *server) DownloadDb(req *pb.DownloadDbRequest, stream pb.EmcacheService_
 	switch requestedCompression {
 	case pb.Compression_ZSTD:
 		responseCompression = pb.Compression_ZSTD
-		log.Printf("Client requested ZSTD compression for %s, using ZSTD.", collectionName)
 	case pb.Compression_GZIP:
 		responseCompression = pb.Compression_GZIP
-		log.Printf("Client requested GZIP compression for %s, using GZIP.", collectionName)
 	case pb.Compression_NONE:
-		log.Printf("Client requested no compression for %s.", collectionName)
 	default:
-		log.Printf("Client requested unsupported compression %s for %s, falling back to NONE.", requestedCompression, collectionName)
+		slog.Warn("Unsupported compression requested, falling back to NONE",
+			"collection", collectionName,
+			"requested_compression", requestedCompression)
 	}
 
+	slog.Info("Using requested compression", "collection", collectionName, "compression", requestedCompression)
 	replicatedColl, found := s.collCache.GetCollectionRefresh(ctx, collectionName)
 	if !found {
-		log.Printf("CRITICAL: Collection '%s' not found in cache. Collection might have been removed.", collectionName)
+		slog.Error("Collection not found in cache", "collection", collectionName)
 		return status.Error(codes.Internal, "Failed to get current collection version")
 	}
 	currentVersion := replicatedColl.CurrentVersion
@@ -79,31 +79,47 @@ func (s *server) DownloadDb(req *pb.DownloadDbRequest, stream pb.EmcacheService_
 	snapshotFileName := fmt.Sprintf("%s_v%d.snapshot", collectionName, currentVersion)
 	snapshotPath, cleanupSnapshot, err := snapshot.GetOrGenerateSnapshot(ctx, dbPath, s.sqliteDir, snapshotFileName)
 	if err != nil {
-		log.Printf("Error preparing snapshot for %s (v%d): %v", collectionName, currentVersion, err)
+		slog.Error("Failed to prepare snapshot",
+			"collection", collectionName,
+			"version", currentVersion,
+			"error", err)
 		return status.Errorf(codes.Internal, "Failed to prepare database snapshot for download")
 	}
 	defer cleanupSnapshot()
 
-	log.Printf("Streaming snapshot version %d for collection '%s' from %s", currentVersion, collectionName, snapshotPath)
+	slog.Info("Streaming snapshot",
+		"collection", collectionName,
+		"version", currentVersion,
+		"path", snapshotPath)
+
 	file, err := os.Open(snapshotPath)
 	if err != nil {
-		log.Printf("Error opening snapshot file %s for streaming: %v", snapshotPath, err)
+		slog.Error("Failed to open snapshot file",
+			"collection", collectionName,
+			"path", snapshotPath,
+			"error", err)
 		return status.Errorf(codes.Internal, "Failed to open database snapshot for streaming")
 	}
 	defer file.Close()
 
 	if err := stream.Send(&pb.DownloadDbResponse{Version: int32(currentVersion), Compression: responseCompression}); err != nil {
-		log.Printf("Error sending DB version for collection %s: %v", collectionName, err)
+		slog.Error("Failed to send version information",
+			"collection", collectionName,
+			"version", currentVersion,
+			"error", err)
 		return status.Errorf(codes.Internal, "Failed to send database version")
 	}
 
 	chunkSize := 1024 * 1024 * 5 // 5MB chunks
 	if err := compressAndSendStream(file, stream, responseCompression, chunkSize); err != nil {
-		log.Printf("Error streaming DB for collection %s (compression: %s): %v", collectionName, responseCompression, err)
+		slog.Error("Failed to stream database content",
+			"collection", collectionName,
+			"compression", responseCompression,
+			"error", err)
 		return status.Errorf(codes.Internal, "Failed to stream database content")
 	}
 
-	log.Printf("Finished streaming DB for collection: %s", collectionName)
+	slog.Info("Finished streaming database", "collection", collectionName)
 	return nil
 }
 
@@ -118,17 +134,23 @@ func (s *server) GetOplogEntries(ctx context.Context, req *pb.GetOplogEntriesReq
 
 	if limit <= 0 {
 		limit = 100
-		log.Printf("gRPC GetOplogEntries: Invalid or missing limit, defaulting to %d", limit)
+		slog.Info("Using default limit for oplog entries", "limit", limit)
 	} else if limit > 1000 {
 		limit = 1000
-		log.Printf("gRPC GetOplogEntries: Requested limit %d exceeds max limit, capping at %d", req.GetLimit(), limit)
+		slog.Info("Capping requested limit", "requested", req.GetLimit(), "capped", limit)
 	}
 
-	log.Printf("gRPC GetOplogEntries request for collections %v after index %d with limit %d", collectionNames, afterIndex, limit)
+	slog.Info("Fetching oplog entries",
+		"collections", collectionNames,
+		"after_index", afterIndex,
+		"limit", limit)
 
 	entries, err := db.GetOplogEntriesMultipleCollections(ctx, s.pgPool, collectionNames, afterIndex, int(limit))
 	if err != nil {
-		log.Printf("Error fetching oplog entries for collections %v after index %d: %v", collectionNames, afterIndex, err)
+		slog.Error("Failed to fetch oplog entries",
+			"collections", collectionNames,
+			"after_index", afterIndex,
+			"error", err)
 		return nil, status.Error(codes.Internal, "Failed to fetch oplog entries")
 	}
 
@@ -136,24 +158,28 @@ func (s *server) GetOplogEntries(ctx context.Context, req *pb.GetOplogEntriesReq
 	for _, entry := range entries {
 		pbEntry, err := convertDbOplogToProto(entry)
 		if err != nil {
-			log.Printf("Error converting oplog entry %d (v%d) for %s to proto: %v", entry.ID, entry.Version, entry.Collection, err)
+			slog.Error("Failed to convert oplog entry",
+				"entry_id", entry.ID,
+				"version", entry.Version,
+				"collection", entry.Collection,
+				"error", err)
 			return nil, status.Error(codes.Internal, "Failed to convert oplog entry")
 		}
 		pbEntries = append(pbEntries, pbEntry)
 	}
 
-	log.Printf("Returning %d oplog entries for collections %v", len(pbEntries), collectionNames)
+	slog.Info("Returning oplog entries", "count", len(pbEntries), "collections", collectionNames)
 
 	return &pb.GetOplogEntriesResponse{Entries: pbEntries}, nil
 }
 
 // GetCollections returns a list of all collections currently configured for replication.
 func (s *server) GetCollections(ctx context.Context, req *pb.GetCollectionsRequest) (*pb.GetCollectionsResponse, error) {
-	log.Printf("gRPC GetCollections request")
+	slog.Info("Fetching all collections")
 
 	internalCollections, err := db.GetAllReplicatedCollectionsWithShapes(ctx, s.pgPool)
 	if err != nil {
-		log.Printf("Error fetching all replicated collections with shapes: %v", err)
+		slog.Error("Failed to fetch collections", "error", err)
 		return nil, status.Error(codes.Internal, "Failed to fetch collection list")
 	}
 
@@ -167,7 +193,7 @@ func (s *server) GetCollections(ctx context.Context, req *pb.GetCollectionsReque
 		pbCollections = append(pbCollections, pbColl)
 	}
 
-	log.Printf("Returning %d collections", len(pbCollections))
+	slog.Info("Returning collections", "count", len(pbCollections))
 
 	return &pb.GetCollectionsResponse{Collections: pbCollections}, nil
 }
@@ -182,16 +208,16 @@ func (s *server) AddCollection(ctx context.Context, req *pb.AddCollectionRequest
 		return nil, status.Error(codes.InvalidArgument, "Shape definition cannot be empty")
 	}
 
-	log.Printf("gRPC AddCollection request for collection: %s", collectionName)
+	slog.Info("Adding collection", "collection", collectionName)
 
 	collShape, err := convertProtoShapeToInternal(protoShape)
 	if err != nil {
-		log.Printf("Error converting proto shape for collection '%s': %v", collectionName, err)
+		slog.Error("Failed to convert shape", "collection", collectionName, "error", err)
 		return nil, status.Errorf(codes.InvalidArgument, "Invalid shape structure: %v", err)
 	}
 
 	if err := validate.Struct(collShape); err != nil {
-		log.Printf("Internal shape validation failed for collection '%s': %v", collectionName, err)
+		slog.Error("Shape validation failed", "collection", collectionName, "error", err)
 		var validationErrors validator.ValidationErrors
 		if errors.As(err, &validationErrors) {
 			var errMsgs []string
@@ -211,21 +237,21 @@ func (s *server) AddCollection(ctx context.Context, req *pb.AddCollectionRequest
 
 	shapeBytes, err := json.Marshal(collShape)
 	if err != nil {
-		log.Printf("CRITICAL: Failed to marshal internal shape to JSON for collection '%s': %v", collectionName, err)
+		slog.Error("Failed to marshal shape to JSON", "collection", collectionName, "error", err)
 		return nil, status.Error(codes.Internal, "Failed to process shape definition")
 	}
 
 	if err := db.AddReplicatedCollection(ctx, s.pgPool, collectionName, shapeBytes); err != nil {
 		if errors.Is(err, db.ErrCollectionAlreadyExists) {
-			log.Printf("Attempt to add collection '%s' failed: already exists.", collectionName)
+			slog.Warn("Collection already exists", "collection", collectionName)
 			return nil, status.Errorf(codes.AlreadyExists, "Collection '%s' is already configured for replication", collectionName)
 		}
 
-		log.Printf("Error adding replicated collection '%s' to database: %v", collectionName, err)
+		slog.Error("Failed to add collection", "collection", collectionName, "error", err)
 		return nil, status.Error(codes.Internal, "Failed to add collection to replication list")
 	}
 
-	log.Printf("Successfully added collection '%s' for replication.", collectionName)
+	slog.Info("Collection added successfully", "collection", collectionName)
 	return &pb.AddCollectionResponse{}, nil
 }
 
@@ -235,18 +261,18 @@ func (s *server) RemoveCollection(ctx context.Context, req *pb.RemoveCollectionR
 		return nil, status.Error(codes.InvalidArgument, "Collection name cannot be empty")
 	}
 
-	log.Printf("gRPC RemoveCollection request for collection: %s", collectionName)
+	slog.Info("Removing collection", "collection", collectionName)
 
 	if err := db.RemoveReplicatedCollection(ctx, s.pgPool, collectionName); err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			log.Printf("Collection '%s' not found for removal.", collectionName)
+			slog.Warn("Collection not found for removal", "collection", collectionName)
 			return nil, status.Errorf(codes.NotFound, "Collection %s not found for removal", collectionName)
 		}
-		log.Printf("Error removing replicated collection '%s' from database: %v", collectionName, err)
+		slog.Error("Failed to remove collection", "collection", collectionName, "error", err)
 		return nil, status.Error(codes.Internal, "Failed to remove collection from replication list")
 	}
 
-	log.Printf("Successfully removed collection '%s' from replication.", collectionName)
+	slog.Info("Collection removed successfully", "collection", collectionName)
 	return &pb.RemoveCollectionResponse{}, nil
 }
 

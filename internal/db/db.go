@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nrjais/emcache/internal/shape"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -35,7 +36,7 @@ func ConnectPostgres(ctx context.Context, databaseURL string) (*pgxpool.Pool, er
 		return nil, fmt.Errorf("failed to ping postgres: %w", err)
 	}
 
-	log.Println("Successfully connected to PostgreSQL.")
+	slog.Info("Database connection established", "db", "PostgreSQL")
 	return pool, nil
 }
 
@@ -53,12 +54,12 @@ func ConnectMongo(ctx context.Context, mongoURL string) (*mongo.Client, error) {
 		disconnectCtx, disconnectCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer disconnectCancel()
 		if disconnectErr := client.Disconnect(disconnectCtx); disconnectErr != nil {
-			log.Printf("Error disconnecting from mongo after ping failure: %v", disconnectErr)
+			slog.Error("Failed to disconnect from MongoDB after ping failure", "error", disconnectErr)
 		}
 		return nil, fmt.Errorf("failed to ping mongo: %w", err)
 	}
 
-	log.Println("Successfully connected to MongoDB.")
+	slog.Info("Database connection established", "db", "MongoDB")
 	return client, nil
 }
 
@@ -164,7 +165,7 @@ func IncrementCollectionVersion(ctx context.Context, pool *pgxpool.Pool, collect
 	if err != nil {
 		return 0, fmt.Errorf("failed to increment version for collection '%s': %w", collectionName, err)
 	}
-	log.Printf("Incremented version for collection '%s' to %d", collectionName, newVersion)
+	slog.Info("Collection version incremented", "collection", collectionName, "new_version", newVersion)
 	return newVersion, nil
 }
 
@@ -224,27 +225,19 @@ type ReplicatedCollection struct {
 }
 
 func AddReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collectionName string, shapeJSON []byte) error {
-	var exists bool
-	checkSql := `SELECT EXISTS(SELECT 1 FROM replicated_collections WHERE collection_name = $1)`
-	err := pool.QueryRow(ctx, checkSql, collectionName).Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("failed to check if collection '%s' exists: %w", collectionName, err)
-	}
-
-	if exists {
-		log.Printf("Attempted to add collection '%s' which already exists. No changes made.", collectionName)
-		return ErrCollectionAlreadyExists
-	}
-
 	sql := `
-        INSERT INTO replicated_collections (collection_name, shape, current_version)
-        VALUES ($1, $2, 0)`
-
-	_, err = pool.Exec(ctx, sql, collectionName, shapeJSON)
+        INSERT INTO replicated_collections (collection_name, current_version, shape)
+        VALUES ($1, 1, $2)`
+	_, err := pool.Exec(ctx, sql, collectionName, shapeJSON)
 	if err != nil {
-		return fmt.Errorf("failed to insert new replicated collection '%s': %w", collectionName, err)
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // Unique violation
+			slog.Warn("Collection already exists", "collection", collectionName)
+			return ErrCollectionAlreadyExists
+		}
+		return fmt.Errorf("failed to add replicated collection '%s': %w", collectionName, err)
 	}
-	log.Printf("Added collection '%s' to replicated_collections table.", collectionName)
+	slog.Info("Collection added to replication", "collection", collectionName)
 	return nil
 }
 
@@ -254,22 +247,22 @@ func RemoveReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collect
 	if err != nil {
 		return fmt.Errorf("failed to remove replicated collection '%s': %w", collectionName, err)
 	}
-	if cmdTag.RowsAffected() > 0 {
-		log.Printf("Removed collection '%s' from replicated_collections table.", collectionName)
-	} else {
-		log.Printf("Collection '%s' not found in replicated_collections table for removal.", collectionName)
+	if cmdTag.RowsAffected() == 0 {
+		slog.Warn("Collection not found for removal", "collection", collectionName)
+		return fmt.Errorf("collection '%s' %w", collectionName, ErrCollectionNotFound)
 	}
+	slog.Info("Collection removed from replication", "collection", collectionName)
 	return nil
 }
 
 func GetAllReplicatedCollectionsWithShapes(ctx context.Context, pool *pgxpool.Pool) ([]ReplicatedCollection, error) {
-	sql := `SELECT collection_name, current_version, shape
-           FROM replicated_collections
-           ORDER BY collection_name`
-
+	sql := `
+        SELECT collection_name, current_version, shape
+        FROM replicated_collections
+        ORDER BY collection_name`
 	rows, err := pool.Query(ctx, sql)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query all replicated collections with shapes: %w", err)
+		return nil, fmt.Errorf("failed to query replicated collections with shapes: %w", err)
 	}
 	defer rows.Close()
 
@@ -277,27 +270,27 @@ func GetAllReplicatedCollectionsWithShapes(ctx context.Context, pool *pgxpool.Po
 	for rows.Next() {
 		var rc ReplicatedCollection
 		var shapeJSON []byte
-
 		if err := rows.Scan(&rc.CollectionName, &rc.CurrentVersion, &shapeJSON); err != nil {
-			return nil, fmt.Errorf("failed to scan replicated collection row: %w", err)
+			return nil, fmt.Errorf("failed to scan replicated collection with shape: %w", err)
 		}
 
+		// Skip collections with NULL shapes or corrupted JSON shapes
 		if shapeJSON != nil {
-			rc.Shape = shape.Shape{}
 			if err := json.Unmarshal(shapeJSON, &rc.Shape); err != nil {
-				log.Printf("CRITICAL: Failed to unmarshal shape JSON from DB for collection '%s': %v. Skipping this collection.", rc.CollectionName, err)
+				slog.Error("Failed to unmarshal shape JSON",
+					"collection", rc.CollectionName,
+					"error", err)
 				continue
 			}
 		} else {
-			log.Printf("Warning: Shape is NULL in DB for collection '%s'. Skipping this collection.", rc.CollectionName)
+			slog.Warn("Shape is NULL in database", "collection", rc.CollectionName)
 			continue
 		}
+
 		collections = append(collections, rc)
 	}
-
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating replicated collection rows: %w", err)
+		return nil, fmt.Errorf("error iterating replicated collections with shapes: %w", err)
 	}
-
 	return collections, nil
 }

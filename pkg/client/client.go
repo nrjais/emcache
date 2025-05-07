@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -373,7 +373,7 @@ func (c *Client) SyncToLatest(ctx context.Context, maxIterations int) error {
 		}
 	}
 
-	log.Printf("Synchronous sync finished for collections: %v", c.collections)
+	slog.Info("Synchronous sync finished for collections", "collections", c.collections)
 	return nil
 }
 

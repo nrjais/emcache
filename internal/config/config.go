@@ -1,7 +1,7 @@
 package config
 
 import (
-	"log"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -65,31 +65,35 @@ func Load() *Config {
 	configFile := os.Getenv("EMCACHE_CONFIG_PATH")
 	if configFile != "" {
 		v.SetConfigFile(configFile)
-		log.Printf("Attempting to load configuration from specified file: %s", configFile)
+		slog.Info("Loading configuration from specified file", "path", configFile)
 	} else {
 		v.SetConfigName("config")
 		v.SetConfigType("yaml")
 		v.AddConfigPath(".")
 		v.AddConfigPath("./config")
 		v.AddConfigPath("/etc/emcache/")
-		log.Printf("EMCACHE_CONFIG_PATH not set, looking for 'config.yaml' in default paths [., ./config, /etc/emcache/]")
+		slog.Info("Config path not set, using default paths",
+			"paths", []string{".", "./config", "/etc/emcache/"},
+			"filename", "config.yaml")
 	}
 
 	err := v.ReadInConfig()
 	if err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			log.Println("Warning: Config file not found. Using defaults and environment variables.")
+			slog.Warn("Config file not found, using defaults and environment variables")
 		} else {
-			log.Fatalf("Failed to read config file: %v", err)
+			slog.Error("Failed to read config file", "error", err)
+			os.Exit(1)
 		}
 	} else {
-		log.Printf("Configuration loaded from file: %s", v.ConfigFileUsed())
+		slog.Info("Configuration loaded", "file", v.ConfigFileUsed())
 	}
 
 	var cfg Config
 	err = v.Unmarshal(&cfg)
 	if err != nil {
-		log.Fatalf("Failed to parse configuration: %v", err)
+		slog.Error("Failed to parse configuration", "error", err)
+		os.Exit(1)
 	}
 
 	validateConfig(&cfg)
@@ -102,20 +106,21 @@ func validateConfig(cfg *Config) {
 
 	err := validator.Struct(cfg)
 	if err != nil {
-		log.Fatalf("Config validation failed: %v", err)
+		slog.Error("Config validation failed", "error", err)
+		os.Exit(1)
 	}
-	log.Println("Configuration validated successfully.")
+	slog.Info("Configuration validated successfully")
 }
 
 func logConfig(cfg *Config) {
-	log.Println("Final Configuration:")
-	log.Printf(" - Postgres URL: %s", cfg.PostgresURL)
-	log.Printf(" - Mongo URL: %s", cfg.MongoURL)
-	log.Printf(" - gRPC Port: %s", cfg.GRPCPort)
-	log.Printf(" - SQLite Dir: %s", cfg.SQLiteDir)
-	log.Printf(" - Log Level: %s", cfg.LogLevel)
-	log.Printf(" - Coordinator Options: %+v", cfg.CoordinatorOptions)
-	log.Printf(" - Leader Options: %+v", cfg.LeaderOptions)
-	log.Printf(" - Follower Options: %+v", cfg.FollowerOptions)
-	log.Printf(" - Snapshot Options: %+v", cfg.SnapshotOptions)
+	slog.Info("Final Configuration",
+		"postgres_url", cfg.PostgresURL,
+		"mongo_url", cfg.MongoURL,
+		"grpc_port", cfg.GRPCPort,
+		"sqlite_dir", cfg.SQLiteDir,
+		"log_level", cfg.LogLevel,
+		"coordinator", cfg.CoordinatorOptions,
+		"leader", cfg.LeaderOptions,
+		"follower", cfg.FollowerOptions,
+		"snapshot", cfg.SnapshotOptions)
 }

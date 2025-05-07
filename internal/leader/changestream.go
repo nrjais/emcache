@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -65,7 +65,7 @@ func StartChangeStreamListener(
 	cfg *config.LeaderConfig,
 ) {
 	collectionName := replicatedColl.CollectionName
-	log.Printf("[Leader:%s] Starting change stream listener...", collectionName)
+	slog.Info("Starting change stream listener", "role", "Leader", "collection", collectionName)
 
 	resumeTokenUpdateInterval := time.Duration(cfg.ResumeTokenUpdateIntervalSecs) * time.Second
 	initialRetryDelay := 1 * time.Second
@@ -75,7 +75,9 @@ func StartChangeStreamListener(
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[Leader:%s] Context cancelled, stopping change stream listener.", collectionName)
+			slog.Info("Context cancelled, stopping change stream listener",
+				"role", "Leader",
+				"collection", collectionName)
 			return
 		default:
 		}
@@ -83,17 +85,25 @@ func StartChangeStreamListener(
 		err := processStream(ctx, pool, mongoClient, dbName, replicatedColl, resumeTokenUpdateInterval, cfg.InitialScanBatchSize)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
-				log.Printf("[Leader:%s] Context cancelled during stream processing.", collectionName)
+				slog.Info("Context cancelled during stream processing",
+					"role", "Leader",
+					"collection", collectionName)
 				return
 			}
-			log.Printf("[Leader:%s] Error processing change stream: %v. Retrying in %v...", collectionName, err, currentRetryDelay)
+			slog.Error("Error processing change stream",
+				"role", "Leader",
+				"collection", collectionName,
+				"error", err,
+				"retry_delay", currentRetryDelay)
 			time.Sleep(currentRetryDelay)
 			currentRetryDelay *= 2
 			if currentRetryDelay > maxRetryDelay {
 				currentRetryDelay = maxRetryDelay
 			}
 		} else {
-			log.Printf("[Leader:%s] Change stream processing stopped gracefully or encountered an unrecoverable state.", collectionName)
+			slog.Info("Change stream processing stopped gracefully or encountered an unrecoverable state",
+				"role", "Leader",
+				"collection", collectionName)
 			return
 		}
 	}
@@ -126,15 +136,23 @@ func processStream(
 
 	if found && tokenStr != "" {
 		if err := json.Unmarshal([]byte(tokenStr), &resumeToken); err != nil {
-			log.Printf("[Leader:%s] Failed to unmarshal stored resume token '%s': %v. Performing initial scan.", collectionName, tokenStr, err)
+			slog.Warn("Failed to unmarshal stored resume token",
+				"role", "Leader",
+				"collection", collectionName,
+				"token", tokenStr,
+				"error", err)
 			initialScanRequired = true
 		} else {
-			log.Printf("[Leader:%s] Found resume token. Attempting to resume stream...", collectionName)
+			slog.Info("Found resume token, attempting to resume stream",
+				"role", "Leader",
+				"collection", collectionName)
 			csOpts.SetResumeAfter(resumeToken)
 			initialScanRequired = false
 		}
 	} else {
-		log.Printf("[Leader:%s] No resume token found in Postgres. Performing initial scan.", collectionName)
+		slog.Info("No resume token found in Postgres, performing initial scan",
+			"role", "Leader",
+			"collection", collectionName)
 		initialScanRequired = true
 	}
 
@@ -144,16 +162,26 @@ func processStream(
 			return fmt.Errorf("failed to increment collection version before initial scan: %w", err)
 		}
 		currentVersion = newVersion
-		log.Printf("[Leader:%s] Initial scan required. Incremented version to %d.", collectionName, currentVersion)
+		slog.Info("Initial scan required, incremented version",
+			"role", "Leader",
+			"collection", collectionName,
+			"version", currentVersion)
 	} else {
-		log.Printf("[Leader:%s] Resuming stream for version %d.", collectionName, currentVersion)
+		slog.Info("Resuming stream",
+			"role", "Leader",
+			"collection", collectionName,
+			"version", currentVersion)
 	}
 
 	stream, err = coll.Watch(ctx, mongo.Pipeline{}, csOpts)
 	if err != nil {
 		// Check for specific resume token errors (e.g., InvalidResumeToken, ChangeStreamHistoryLost)
 		if cmdErr, ok := err.(mongo.CommandError); ok && (cmdErr.Code == 286 || cmdErr.Code == 280) {
-			log.Printf("[Leader:%s] Resume token invalid or history lost (Code: %d): %v. Starting stream from beginning and performing initial scan.", collectionName, cmdErr.Code, err)
+			slog.Warn("Resume token invalid or history lost",
+				"role", "Leader",
+				"collection", collectionName,
+				"code", cmdErr.Code,
+				"error", err)
 			initialScanRequired = true
 
 			csOpts.SetResumeAfter(nil)
@@ -164,13 +192,18 @@ func processStream(
 			}
 
 			if initialScanRequired {
-				log.Printf("[Leader:%s] Invalid resume token detected, forcing initial scan and version increment.", collectionName)
+				slog.Info("Invalid resume token detected, forcing initial scan and version increment",
+					"role", "Leader",
+					"collection", collectionName)
 				newVersion, err := db.IncrementCollectionVersion(ctx, pool, collectionName)
 				if err != nil {
 					return fmt.Errorf("failed to increment collection version after invalid token: %w", err)
 				}
 				currentVersion = newVersion
-				log.Printf("[Leader:%s] Incremented version to %d due to invalid token.", collectionName, currentVersion)
+				slog.Info("Incremented version due to invalid token",
+					"role", "Leader",
+					"collection", collectionName,
+					"version", currentVersion)
 			}
 		} else {
 			return fmt.Errorf("failed to start change stream: %w", err)
@@ -178,24 +211,36 @@ func processStream(
 	}
 	defer stream.Close(ctx)
 
-	log.Printf("[Leader:%s] Change stream started successfully.", collectionName)
+	slog.Info("Change stream started successfully",
+		"role", "Leader",
+		"collection", collectionName)
 
 	if initialScanRequired {
-		log.Printf("[Leader:%s] Performing initial collection scan...", collectionName)
+		slog.Info("Performing initial collection scan",
+			"role", "Leader",
+			"collection", collectionName)
 		initialResumeToken := stream.ResumeToken()
 		if initialResumeToken == nil {
-			log.Printf("[Leader:%s] Warning: Could not get initial resume token before scan. There's a small chance of missing events.", collectionName)
+			slog.Warn("Could not get initial resume token before scan, risk of missing events",
+				"role", "Leader",
+				"collection", collectionName)
 		}
 
 		if err := performInitialScan(ctx, pool, coll, collectionName, currentVersion, replicatedColl.Shape, initialScanBatchSize); err != nil {
 			return fmt.Errorf("initial collection scan failed: %w", err)
 		}
-		log.Printf("[Leader:%s] Initial collection scan completed for version %d.", collectionName, currentVersion)
+		slog.Info("Initial collection scan completed",
+			"role", "Leader",
+			"collection", collectionName,
+			"version", currentVersion)
 
 		if initialResumeToken != nil {
 			currentToken = initialResumeToken
 			if err := saveResumeToken(ctx, pool, collectionName, currentToken); err != nil {
-				log.Printf("[Leader:%s] Error saving initial resume token after scan: %v", collectionName, err)
+				slog.Error("Error saving initial resume token after scan",
+					"role", "Leader",
+					"collection", collectionName,
+					"error", err)
 			}
 		}
 	}
@@ -211,13 +256,20 @@ func processStream(
 		currentToken = stream.ResumeToken()
 
 		if err := processChangeEvent(ctx, pool, event, collectionName, currentVersion, replicatedColl.Shape); err != nil {
-			log.Printf("[Leader:%s] Failed to process change event: %v. Event: %v", collectionName, err, event)
+			slog.Error("Failed to process change event",
+				"role", "Leader",
+				"collection", collectionName,
+				"error", err,
+				"event", fmt.Sprintf("%v", event))
 			return fmt.Errorf("failed to process change event: %w", err)
 		}
 
 		if time.Since(lastTokenUpdateTime) > resumeTokenUpdateInterval {
 			if err := saveResumeToken(ctx, pool, collectionName, currentToken); err != nil {
-				log.Printf("[Leader:%s] Error saving resume token periodically: %v", collectionName, err)
+				slog.Error("Error saving resume token periodically",
+					"role", "Leader",
+					"collection", collectionName,
+					"error", err)
 			}
 			lastTokenUpdateTime = time.Now()
 		}
@@ -227,13 +279,17 @@ func processStream(
 		return fmt.Errorf("change stream iteration error: %w", err)
 	}
 
-	log.Printf("[Leader:%s] Change stream finished without error.", collectionName)
+	slog.Info("Change stream finished without error",
+		"role", "Leader",
+		"collection", collectionName)
 	return nil
 }
 
 func saveResumeToken(ctx context.Context, pool *pgxpool.Pool, collection string, token bson.Raw) error {
 	if token == nil {
-		log.Printf("[Leader:%s] Attempted to save a nil resume token. Skipping.", collection)
+		slog.Warn("Attempted to save a nil resume token, skipping",
+			"role", "Leader",
+			"collection", collection)
 		return nil
 	}
 	tokenBytes, err := json.Marshal(token)
@@ -251,7 +307,10 @@ func processChangeEvent(ctx context.Context, pool *pgxpool.Pool, event bson.M, c
 
 	docKey, ok := event["documentKey"].(bson.M)
 	if !ok || docKey == nil {
-		log.Printf("[Leader:%s] Warning: Skipping event with missing or invalid documentKey: %v", collectionName, event)
+		slog.Warn("Skipping event with missing or invalid documentKey",
+			"role", "Leader",
+			"collection", collectionName,
+			"event", fmt.Sprintf("%v", event))
 		return nil
 	}
 	var docID string
@@ -265,7 +324,10 @@ func processChangeEvent(ctx context.Context, pool *pgxpool.Pool, event bson.M, c
 
 	clusterTime, ok := event["clusterTime"].(primitive.Timestamp)
 	if !ok {
-		log.Printf("[Leader:%s] Warning: Event missing clusterTime, using wall clock time. Event: %v", collectionName, event)
+		slog.Warn("Event missing clusterTime, using wall clock time",
+			"role", "Leader",
+			"collection", collectionName,
+			"event", fmt.Sprintf("%v", event))
 		clusterTime = primitive.Timestamp{T: uint32(time.Now().Unix())}
 	}
 	ts := time.Unix(int64(clusterTime.T), 0)
@@ -279,20 +341,32 @@ func processChangeEvent(ctx context.Context, pool *pgxpool.Pool, event bson.M, c
 		operation = "UPSERT"
 		fullDoc, ok := event["fullDocument"].(bson.M)
 		if !ok {
-			log.Printf("[Leader:%s] Warning: UPSERT event missing fullDocument ID %s: %v. Skipping.", collectionName, docID, event)
+			slog.Warn("UPSERT event missing fullDocument ID",
+				"role", "Leader",
+				"collection", collectionName,
+				"doc_id", docID,
+				"event", fmt.Sprintf("%v", event))
 			return nil
 		}
 
 		data, err = transformDocument(fullDoc, collShape)
 		if err != nil {
-			log.Printf("[Leader:%s] Failed to transform document for ID %s: %v. Skipping event.", collectionName, docID, err)
+			slog.Warn("Failed to transform document for ID",
+				"role", "Leader",
+				"collection", collectionName,
+				"doc_id", docID,
+				"error", err)
 			return nil
 		}
 	case "delete":
 		operation = "DELETE"
 
 	default:
-		log.Printf("[Leader:%s] Skipping unhandled operation type '%s' for doc %s", collectionName, opTypeStr, docID)
+		slog.Warn("Skipping unhandled operation type",
+			"role", "Leader",
+			"collection", collectionName,
+			"op_type", opTypeStr,
+			"doc_id", docID)
 		return nil
 	}
 
@@ -310,7 +384,12 @@ func processChangeEvent(ctx context.Context, pool *pgxpool.Pool, event bson.M, c
 		return err
 	}
 
-	log.Printf("[Leader:%s] Processed %s for doc %s -> Oplog Index %d", collectionName, operation, docID, idx)
+	slog.Info("Processed",
+		"role", "Leader",
+		"collection", collectionName,
+		"operation", operation,
+		"doc_id", docID,
+		"oplog_index", idx)
 	return nil
 }
 
@@ -337,7 +416,10 @@ func performInitialScan(ctx context.Context, pool *pgxpool.Pool, coll *mongo.Col
 
 		scanCount++
 		if scanCount%batchSize == 0 {
-			log.Printf("[Leader:%s-Scan] Scanned %d documents...", collectionName, scanCount)
+			slog.Info("Scanned documents",
+				"role", "Leader",
+				"collection", collectionName,
+				"count", scanCount)
 		}
 	}
 
@@ -345,14 +427,21 @@ func performInitialScan(ctx context.Context, pool *pgxpool.Pool, coll *mongo.Col
 		return fmt.Errorf("cursor error during initial scan: %w", err)
 	}
 
-	log.Printf("[Leader:%s-Scan] Finished initial scan of %d documents in %v.", collectionName, scanCount, time.Since(startTime))
+	slog.Info("Finished initial scan",
+		"role", "Leader",
+		"collection", collectionName,
+		"count", scanCount,
+		"duration", time.Since(startTime))
 	return nil
 }
 
 func createAndInsertEntry(ctx context.Context, pool *pgxpool.Pool, doc bson.M, collectionName string, version int, collShape shape.Shape) (string, error) {
 	docIDRaw, ok := doc["_id"]
 	if !ok {
-		log.Printf("[Leader:%s-Scan] Warning: Skipping document with missing _id during initial scan: %v", collectionName, doc)
+		slog.Warn("Skipping document with missing _id during initial scan",
+			"role", "Leader",
+			"collection", collectionName,
+			"doc", fmt.Sprintf("%v", doc))
 		return "", fmt.Errorf("document with missing _id during initial scan: %v", doc)
 	}
 	var docID string
@@ -365,7 +454,11 @@ func createAndInsertEntry(ctx context.Context, pool *pgxpool.Pool, doc bson.M, c
 
 	data, err := transformDocument(doc, collShape)
 	if err != nil {
-		log.Printf("[Leader:%s-Scan] Failed to transform document for ID %s: %v. Skipping doc.", collectionName, docID, err)
+		slog.Warn("Failed to transform document for ID",
+			"role", "Leader",
+			"collection", collectionName,
+			"doc_id", docID,
+			"error", err)
 		return docID, fmt.Errorf("failed to transform document for ID %s: %w", docID, err)
 	}
 	oplogEntry := db.OplogEntry{

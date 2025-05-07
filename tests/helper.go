@@ -3,7 +3,7 @@ package tests
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -61,7 +61,9 @@ func setupSyncedCollection(t *testing.T, ctx context.Context, numInitialDocs int
 	t.Helper()
 
 	dbName := "test"
-	log.Printf("[%s] Setting up collection: %s", t.Name(), collectionName)
+	slog.Info("Setting up collection",
+		"test", t.Name(),
+		"collection", collectionName)
 
 	initialDocs := make([]TestDoc, 0, numInitialDocs)
 	for i := range numInitialDocs {
@@ -81,21 +83,29 @@ func setupSyncedCollection(t *testing.T, ctx context.Context, numInitialDocs int
 	t.Cleanup(func() {
 		_, err := emcacheAdminClient.RemoveCollection(context.Background(), collectionName)
 		require.NoError(t, err, "Failed to remove collection from Emcache")
-		log.Printf("[%s] Dropping collection: %s", t.Name(), collectionName)
+		slog.Info("Dropping collection",
+			"test", t.Name(),
+			"collection", collectionName)
 		if err := collection.Drop(context.Background()); err != nil {
-			log.Printf("[%s] Failed to drop collection %s: %v", t.Name(), collectionName, err)
+			slog.Error("Failed to drop collection",
+				"test", t.Name(),
+				"collection", collectionName,
+				"error", err)
 		}
 	})
 
 	if len(initialDocs) > 0 {
-		log.Printf("[%s] Inserting %d initial documents into MongoDB...", t.Name(), len(initialDocs))
+		slog.Info("Inserting initial documents into MongoDB",
+			"test", t.Name(),
+			"count", len(initialDocs))
 		_, err := collection.InsertMany(ctx, lo.Map(initialDocs, func(doc TestDoc, _ int) any {
 			return doc
 		}))
 		require.NoError(t, err, "Failed to insert initial documents into MongoDB")
 	}
 
-	log.Printf("[%s] Waiting for potential initial sync / propagation...", t.Name())
+	slog.Info("Waiting for potential initial sync / propagation",
+		"test", t.Name())
 	time.Sleep(10 * time.Second)
 	emcacheClient := createClient(t, ctx, collectionName)
 
@@ -137,8 +147,13 @@ func verifyDocsInSQLite(t *testing.T, client *emclient.Client, collectionName st
 	}
 
 	if len(expectedDocs) > 0 {
-		log.Printf("[%s] Successfully verified %d documents in Client DB %s", t.Name(), len(expectedDocs), collectionName)
+		slog.Info("Successfully verified documents in Client DB",
+			"test", t.Name(),
+			"count", len(expectedDocs),
+			"collection", collectionName)
 	} else {
-		log.Printf("[%s] Successfully verified Client DB %s is empty as expected", t.Name(), collectionName)
+		slog.Info("Successfully verified Client DB is empty as expected",
+			"test", t.Name(),
+			"collection", collectionName)
 	}
 }

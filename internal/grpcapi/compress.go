@@ -12,19 +12,39 @@ import (
 	pb "github.com/nrjais/emcache/pkg/protos"
 )
 
+type wrapper struct {
+	io.Reader
+	n uint64
+}
+
+func newWrapper(r io.Reader) *wrapper {
+	return &wrapper{Reader: r, n: 0}
+}
+
+func (w *wrapper) Read(p []byte) (int, error) {
+	n, err := w.Reader.Read(p)
+	w.n += uint64(n)
+	return n, err
+}
+
 func compressAndSendStream(
 	reader io.Reader,
 	stream pb.EmcacheService_DownloadDbServer,
 	compression pb.Compression,
 	chunkSize int,
 ) error {
+	wrappedReader := newWrapper(reader)
+	defer func() {
+		slog.Info("Download completed original size", "size", humanize.Bytes(wrappedReader.n), "compression", compression)
+	}()
+
 	switch compression {
 	case pb.Compression_ZSTD:
-		return compressZstdAndSend(reader, stream, chunkSize)
+		return compressZstdAndSend(wrappedReader, stream, chunkSize)
 	case pb.Compression_GZIP:
-		return compressGzipAndSend(reader, stream, chunkSize)
+		return compressGzipAndSend(wrappedReader, stream, chunkSize)
 	case pb.Compression_NONE:
-		return sendChunks(reader, stream, chunkSize, "uncompressed")
+		return sendChunks(wrappedReader, stream, chunkSize, "uncompressed")
 	default:
 		return fmt.Errorf("unsupported compression type requested: %s", compression)
 	}
@@ -50,7 +70,7 @@ func sendChunks(reader io.Reader, stream pb.EmcacheService_DownloadDbServer, chu
 		}
 	}
 
-	slog.Info("Total size of data sent: %s, for %s", humanize.Bytes(totalSent), desc)
+	slog.Info("Download completed", "size", humanize.Bytes(totalSent), "compression", desc)
 	return nil
 }
 

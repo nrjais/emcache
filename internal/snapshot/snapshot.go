@@ -3,7 +3,7 @@ package snapshot
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,22 +38,29 @@ func GetOrGenerateSnapshot(ctx context.Context, dbPath string, baseDir string, s
 			defer snapshotManager.mu.Unlock()
 			if currentInfo, ok := snapshotManager.snapshots[snapshotPath]; ok && currentInfo == info {
 				info.refCount--
-				log.Printf("[Snapshot] Decremented ref count for %s upon download completion (Current refCount: %d)", snapshotPath, info.refCount)
+				slog.Info("Decremented ref count upon download completion",
+					"path", snapshotPath,
+					"refCount", info.refCount)
 			} else {
-				log.Printf("[Snapshot] Snapshot %s was already cleaned up or replaced before download completion ref count decrement.", snapshotPath)
+				slog.Info("Snapshot was already cleaned up or replaced before download completion",
+					"path", snapshotPath)
 			}
 		}
 	}
 
 	if info, exists := snapshotManager.snapshots[snapshotPath]; exists {
 		info.refCount++
-		log.Printf("[Snapshot] Reusing existing snapshot %s (refCount: %d)", snapshotPath, info.refCount)
+		slog.Info("Reusing existing snapshot",
+			"path", snapshotPath,
+			"refCount", info.refCount)
 		snapshotManager.mu.Unlock()
 		return snapshotPath, cleanupFunc(info), nil
 	}
 
 	defer snapshotManager.mu.Unlock()
-	log.Printf("[Snapshot] Creating new snapshot %s for %s", snapshotPath, dbPath)
+	slog.Info("Creating new snapshot",
+		"path", snapshotPath,
+		"source", dbPath)
 
 	if _, statErr := os.Stat(dbPath); statErr != nil {
 		if os.IsNotExist(statErr) {
@@ -63,7 +70,8 @@ func GetOrGenerateSnapshot(ctx context.Context, dbPath string, baseDir string, s
 	}
 
 	creationTime := time.Now()
-	log.Printf("[Snapshot] Using SQLite backup API for %s", snapshotPath)
+	slog.Info("Using SQLite backup API",
+		"path", snapshotPath)
 
 	_ = os.Remove(snapshotPath)
 
@@ -115,25 +123,32 @@ func GetOrGenerateSnapshot(ctx context.Context, dbPath string, baseDir string, s
 		return "", nil, fmt.Errorf("backup finish failed: %w", err)
 	}
 
-	log.Printf("[Snapshot] SQLite backup created successfully in %v", time.Since(backupStart))
+	slog.Info("SQLite backup created successfully",
+		"path", snapshotPath,
+		"duration", time.Since(backupStart))
 
 	info := &snapshotInfo{
 		refCount:     1,
 		creationTime: creationTime,
 	}
 	snapshotManager.snapshots[snapshotPath] = info
-	log.Printf("[Snapshot] Registered snapshot %s (refCount: 1)", snapshotPath)
+	slog.Info("Registered snapshot",
+		"path", snapshotPath,
+		"refCount", 1)
 
 	return snapshotPath, cleanupFunc(info), nil
 }
 
 func StartCleanupLoop(ctx context.Context, wg *sync.WaitGroup, ttl time.Duration, sqliteBaseDir string) {
 	defer wg.Done()
-	log.Printf("[Snapshot] Starting cleanup loop with TTL: %v", ttl)
+	slog.Info("Starting cleanup loop",
+		"ttl", ttl)
 
 	snapshotsDir := filepath.Join(sqliteBaseDir, snapshotDirName)
 	if err := os.MkdirAll(snapshotsDir, 0755); err != nil {
-		log.Printf("[Snapshot] Warning: Failed to create snapshots directory: %v", err)
+		slog.Warn("Failed to create snapshots directory",
+			"path", snapshotsDir,
+			"error", err)
 	}
 
 	checkInterval := ttl / 2
@@ -143,7 +158,7 @@ func StartCleanupLoop(ctx context.Context, wg *sync.WaitGroup, ttl time.Duration
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("[Snapshot] Cleanup loop stopping due to context cancellation.")
+			slog.Info("Cleanup loop stopping due to context cancellation")
 			cleanupStaleSnapshots(ttl, snapshotsDir)
 			return
 		case <-ticker.C:
@@ -153,7 +168,7 @@ func StartCleanupLoop(ctx context.Context, wg *sync.WaitGroup, ttl time.Duration
 }
 
 func cleanupStaleSnapshots(ttl time.Duration, snapshotsDir string) {
-	log.Println("[Snapshot] Running periodic cleanup check...")
+	slog.Info("Running periodic cleanup check")
 	now := time.Now()
 	deletedCount := 0
 
@@ -171,7 +186,9 @@ func cleanupStaleSnapshots(ttl time.Duration, snapshotsDir string) {
 	snapshotsToDelete := make([]string, 0, len(snapshotManager.snapshots))
 	files, err := os.ReadDir(snapshotsDir)
 	if err != nil {
-		log.Printf("[Snapshot] Error reading snapshot directory: %v", err)
+		slog.Error("Error reading snapshot directory",
+			"path", snapshotsDir,
+			"error", err)
 	}
 
 	for _, file := range files {
@@ -191,14 +208,18 @@ func cleanupStaleSnapshots(ttl time.Duration, snapshotsDir string) {
 
 	for _, path := range snapshotsToDelete {
 		if rmErr := os.Remove(path); rmErr != nil {
-			log.Printf("[Snapshot] Error deleting snapshot file %s: %v", path, rmErr)
+			slog.Error("Error deleting snapshot file",
+				"path", path,
+				"error", rmErr)
 		} else {
-			log.Printf("[Snapshot] Deleted stale snapshot file %s", path)
+			slog.Info("Deleted stale snapshot file",
+				"path", path)
 			deletedCount++
 		}
 	}
 
 	if deletedCount > 0 {
-		log.Printf("[Snapshot] Deleted %d stale snapshot(s).", deletedCount)
+		slog.Info("Deleted stale snapshots",
+			"count", deletedCount)
 	}
 }

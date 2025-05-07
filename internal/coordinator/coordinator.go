@@ -2,7 +2,7 @@ package coordinator
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -43,28 +43,36 @@ func NewCoordinator(pgPool *pgxpool.Pool, mongoClient *mongo.Client, mongoDBName
 func (c *Coordinator) Start(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[Coordinator] Panic during periodic collection sync: %v", r)
+			slog.Error("Panic during periodic collection sync",
+				"component", "Coordinator",
+				"error", r)
 		}
 	}()
-	log.Println("[Coordinator] Starting...")
+	slog.Info("Starting", "component", "Coordinator")
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("[Coordinator] Context cancelled. Stopping coordinator and managed collections...")
+			slog.Info("Context cancelled. Stopping coordinator and managed collections",
+				"component", "Coordinator")
 			c.stopAllManaging()
 			return
 		case <-c.collCache.RefreshCh:
-			log.Println("[Coordinator] Received cache refresh signal. Running periodic collection sync...")
+			slog.Info("Received cache refresh signal. Running periodic collection sync",
+				"component", "Coordinator")
 			if err := c.syncCollections(ctx); err != nil {
-				log.Printf("[Coordinator] Error during periodic collection sync: %v", err)
+				slog.Error("Error during periodic collection sync",
+					"component", "Coordinator",
+					"error", err)
 			}
-			log.Println("[Coordinator] Periodic collection sync finished.")
+			slog.Info("Periodic collection sync finished",
+				"component", "Coordinator")
 		}
 	}
 }
 
 func (c *Coordinator) syncCollections(ctx context.Context) error {
-	log.Println("[Coordinator] Starting syncCollections...")
+	slog.Info("Starting syncCollections",
+		"component", "Coordinator")
 	cachedCollections := c.collCache.GetAllCollections()
 
 	cachedCollectionsSet := make(map[string]db.ReplicatedCollection, len(cachedCollections))
@@ -82,14 +90,19 @@ func (c *Coordinator) syncCollections(ctx context.Context) error {
 
 	for collName, replicatedColl := range cachedCollectionsSet {
 		if _, exists := c.managedCollections[collName]; !exists {
-			log.Printf("[Coordinator] Detected new collection to manage from cache: %s", collName)
+			slog.Info("Detected new collection to manage from cache",
+				"component", "Coordinator",
+				"collection", collName)
 			c.startManaging(ctx, replicatedColl)
 		}
 	}
 
 	for _, managedCollKey := range currentManagedKeys {
 		if _, existsInCache := cachedCollectionsSet[managedCollKey]; !existsInCache {
-			log.Printf("[Coordinator] Detected removed collection (no longer in cache) to stop managing: %s", managedCollKey)
+			slog.Info("Detected removed collection to stop managing",
+				"component", "Coordinator",
+				"collection", managedCollKey,
+				"reason", "no longer in cache")
 			c.stopManaging(managedCollKey)
 		}
 	}
@@ -101,7 +114,9 @@ func (c *Coordinator) startManaging(parentCtx context.Context, replicatedColl db
 	collectionName := replicatedColl.CollectionName
 
 	if _, exists := c.managedCollections[collectionName]; exists {
-		log.Printf("[Coordinator:%s] Collection is already being managed.", collectionName)
+		slog.Info("Collection is already being managed",
+			"component", "Coordinator",
+			"collection", collectionName)
 		return
 	}
 
@@ -116,11 +131,15 @@ func (c *Coordinator) startManaging(parentCtx context.Context, replicatedColl db
 func (c *Coordinator) stopManaging(collectionName string) {
 	cancelFunc, exists := c.managedCollections[collectionName]
 	if !exists {
-		log.Printf("[Coordinator:%s] Collection is not currently managed.", collectionName)
+		slog.Info("Collection is not currently managed",
+			"component", "Coordinator",
+			"collection", collectionName)
 		return
 	}
 
-	log.Printf("[Coordinator:%s] Stopping management.", collectionName)
+	slog.Info("Stopping management",
+		"component", "Coordinator",
+		"collection", collectionName)
 	cancelFunc()
 	delete(c.managedCollections, collectionName)
 }
@@ -129,9 +148,13 @@ func (c *Coordinator) stopAllManaging() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	log.Printf("[Coordinator] Stopping management for %d collections.", len(c.managedCollections))
+	slog.Info("Stopping management for collections",
+		"component", "Coordinator",
+		"count", len(c.managedCollections))
 	for name, cancelFunc := range c.managedCollections {
-		log.Printf("[Coordinator:%s] Signaling stop during shutdown.", name)
+		slog.Info("Signaling stop during shutdown",
+			"component", "Coordinator",
+			"collection", name)
 		cancelFunc()
 	}
 	c.managedCollections = make(map[string]context.CancelFunc)

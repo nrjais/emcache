@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -31,7 +31,7 @@ import (
 )
 
 func main() {
-	log.Println("Starting emcache server...")
+	slog.Info("Starting emcache server")
 
 	cfg := config.Load()
 
@@ -40,25 +40,27 @@ func main() {
 
 	pgPool, mongoClient, mongoDBName, err := setupDatabases(ctx, cfg)
 	if err != nil {
-		log.Fatalf("Database setup failed: %v", err)
+		slog.Error("Database setup failed", "error", err)
+		os.Exit(1)
 	}
 	defer pgPool.Close()
 
 	if err := migrations.RunMigrations(pgPool); err != nil {
-		log.Fatalf("Database migration failed: %v", err)
+		slog.Error("Database migration failed", "error", err)
+		os.Exit(1)
 	}
 
 	defer func() {
 		disconnectCtx, disconnectCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer disconnectCancel()
 		if err := mongoClient.Disconnect(disconnectCtx); err != nil {
-			log.Printf("Error disconnecting from MongoDB: %v", err)
+			slog.Error("Error disconnecting from MongoDB", "error", err)
 		}
 	}()
 
 	leaderElector, instanceID := setupLeaderElector(pgPool)
 	defer leaderElector.ReleaseAll()
-	log.Printf("Starting instance with ID: %s", instanceID)
+	slog.Info("Starting instance", "instanceID", instanceID)
 
 	var wg sync.WaitGroup
 	bgTaskCtx, bgTaskCancel := context.WithCancel(ctx)
@@ -68,7 +70,8 @@ func main() {
 
 	err = startCentralFollower(bgTaskCtx, &wg, pgPool, collectionCacheManager, cfg)
 	if err != nil {
-		log.Fatalf("Failed to start central follower: %v", err)
+		slog.Error("Failed to start central follower", "error", err)
+		os.Exit(1)
 	}
 
 	startCollectionCoordinator(bgTaskCtx, &wg, pgPool, mongoClient, mongoDBName, leaderElector, collectionCacheManager, cfg)
@@ -78,19 +81,19 @@ func main() {
 	grpcServer := startGRPCServer(&wg, pgPool, cfg, collectionCacheManager)
 
 	waitForShutdownSignal()
-	log.Println("Shutting down server...")
+	slog.Info("Shutting down server")
 
 	if grpcServer != nil {
 		grpcServer.GracefulStop()
 	}
-	log.Println("Signalling background tasks to stop...")
+	slog.Info("Signalling background tasks to stop")
 	bgTaskCancel()
 
-	log.Println("Waiting for background tasks to stop...")
+	slog.Info("Waiting for background tasks to stop")
 	wg.Wait()
-	log.Println("Background tasks stopped.")
+	slog.Info("Background tasks stopped")
 
-	log.Println("Server stopped gracefully.")
+	slog.Info("Server stopped gracefully")
 }
 
 func setupDatabases(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, *mongo.Client, string, error) {
@@ -117,7 +120,7 @@ func setupDatabases(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, *mo
 		return nil, nil, "", fmt.Errorf("mongo URL must include a database name")
 	}
 	mongoDBName := cs.Database
-	log.Printf("Target MongoDB database: %s", mongoDBName)
+	slog.Info("Target MongoDB database", "database", mongoDBName)
 
 	return pgPool, mongoClient, mongoDBName, nil
 }
@@ -125,7 +128,7 @@ func setupDatabases(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, *mo
 func setupLeaderElector(pgPool *pgxpool.Pool) (*leader.LeaderElector, string) {
 	hostname, err := os.Hostname()
 	if err != nil {
-		log.Printf("Warning: Failed to get hostname, using default instance ID: %v", err)
+		slog.Warn("Failed to get hostname, using default instance ID", "error", err)
 		hostname = "unknown-instance"
 	}
 	instanceID := fmt.Sprintf("%s-%d", hostname, os.Getpid())
@@ -144,7 +147,7 @@ func startCentralFollower(ctx context.Context, wg *sync.WaitGroup, pgPool *pgxpo
 }
 
 func startCollectionCoordinator(ctx context.Context, wg *sync.WaitGroup, pgPool *pgxpool.Pool, mongoClient *mongo.Client, mongoDBName string, leaderElector *leader.LeaderElector, cacheMgr *collectioncache.Manager, cfg *config.Config) {
-	log.Println("Initializing Collection Coordinator...")
+	slog.Info("Initializing Collection Coordinator")
 	coord := coordinator.NewCoordinator(pgPool, mongoClient, mongoDBName, leaderElector, cacheMgr, cfg, wg)
 	wg.Add(1)
 	go func() {
@@ -162,7 +165,10 @@ func startSnapshotCleanup(ctx context.Context, wg *sync.WaitGroup, cfg *config.C
 func startGRPCServer(wg *sync.WaitGroup, pgPool *pgxpool.Pool, cfg *config.Config, collectionCacheManager *collectioncache.Manager) *grpc.Server {
 	lis, err := net.Listen("tcp", cfg.GRPCPort)
 	if err != nil {
-		log.Printf("CRITICAL: Failed to listen on port %s: %v. gRPC server not started.", cfg.GRPCPort, err)
+		slog.Error("Failed to listen on port, gRPC server not started",
+			"port", cfg.GRPCPort,
+			"error", err,
+			"severity", "CRITICAL")
 		return nil
 	}
 
@@ -171,16 +177,16 @@ func startGRPCServer(wg *sync.WaitGroup, pgPool *pgxpool.Pool, cfg *config.Confi
 	pb.RegisterEmcacheServiceServer(s, grpcServerImpl)
 	reflection.Register(s)
 
-	log.Printf("gRPC server listening on %s", cfg.GRPCPort)
+	slog.Info("gRPC server listening", "port", cfg.GRPCPort)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		log.Println("gRPC server starting to serve...")
+		slog.Info("gRPC server starting to serve")
 		if err := s.Serve(lis); err != nil {
 			if !errors.Is(err, grpc.ErrServerStopped) {
-				log.Printf("CRITICAL: Failed to serve gRPC: %v", err)
+				slog.Error("Failed to serve gRPC", "error", err, "severity", "CRITICAL")
 			} else {
-				log.Println("gRPC server stopped gracefully.")
+				slog.Info("gRPC server stopped gracefully")
 			}
 		}
 	}()

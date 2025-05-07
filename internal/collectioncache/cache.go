@@ -3,7 +3,7 @@ package collectioncache
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -24,7 +24,9 @@ func NewManager(pgPool *pgxpool.Pool, cfg *config.Config) *Manager {
 	interval := time.Duration(cfg.CoordinatorOptions.CollectionRefreshIntervalSecs) * time.Second
 	if interval <= 0 {
 		interval = 5 * time.Second
-		log.Printf("[CollectionCache] Invalid refresh interval %d, using default %v", cfg.CoordinatorOptions.CollectionRefreshIntervalSecs, interval)
+		slog.Warn("Invalid refresh interval, using default",
+			"configured_seconds", cfg.CoordinatorOptions.CollectionRefreshIntervalSecs,
+			"default", interval)
 	}
 	return &Manager{
 		pgPool:          pgPool,
@@ -35,31 +37,31 @@ func NewManager(pgPool *pgxpool.Pool, cfg *config.Config) *Manager {
 }
 
 func (m *Manager) Start(ctx context.Context, wg *sync.WaitGroup) {
-	log.Println("[CollectionCache] Starting...")
+	slog.Info("Collection cache starting")
 	wg.Add(1)
 
 	if err := m.refresh(ctx); err != nil {
-		log.Printf("[CollectionCache] CRITICAL: Initial fetch failed: %v. Cache might be empty.", err)
+		slog.Error("Initial fetch failed, cache might be empty", "error", err)
 	} else {
-		log.Printf("[CollectionCache] Initial fetch successful, %d collections loaded.", len(m.collections))
+		slog.Info("Initial fetch successful", "collections_loaded", len(m.collections))
 	}
 
 	go func() {
 		defer wg.Done()
-		log.Printf("[CollectionCache] Refresh loop started with interval %v.", m.refreshInterval)
+		slog.Info("Refresh loop started", "interval", m.refreshInterval)
 		for {
 			select {
 			case <-time.After(m.refreshInterval):
 				if err := m.refresh(ctx); err != nil {
-					log.Printf("[CollectionCache] Error during periodic refresh: %v", err)
+					slog.Error("Failed to refresh collections", "error", err)
 				} else {
 					m.mu.RLock()
 					count := len(m.collections)
 					m.mu.RUnlock()
-					log.Printf("[CollectionCache] Periodic refresh successful, %d collections loaded.", count)
+					slog.Info("Collections refreshed", "count", count)
 				}
 			case <-ctx.Done():
-				log.Println("[CollectionCache] Context cancelled. Refresh loop exiting.")
+				slog.Info("Context cancelled, refresh loop exiting")
 				return
 			}
 		}
@@ -87,7 +89,7 @@ func (m *Manager) refresh(ctx context.Context) error {
 	select {
 	case m.RefreshCh <- struct{}{}:
 	default:
-		log.Println("[CollectionCache] Refresh channel is blocked. Skipping refresh.")
+		slog.Warn("Refresh channel is blocked, skipping notification")
 	}
 	return nil
 }

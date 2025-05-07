@@ -2,7 +2,7 @@ package manager
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -33,14 +33,14 @@ func ManageCollection(
 
 	defer roleCancel()
 
-	log.Printf("[%s] Starting management routine", collectionName)
+	slog.Info("Starting management routine", "collection", collectionName)
 
 	leaseDuration := time.Duration(cfg.LeaderOptions.LeaseDurationSecs) * time.Second
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[%s] Management context cancelled. Stopping.", collectionName)
+			slog.Info("Management context cancelled, stopping", "collection", collectionName)
 			leaderElector.Release(collectionName)
 			roleCancel()
 			return
@@ -54,7 +54,9 @@ func ManageCollection(
 				var acquired bool
 				acquired, acquireErr = leaderElector.TryAcquire(ctx, collectionName, leaseDuration)
 				if acquireErr != nil {
-					log.Printf("[%s] Error trying to acquire leadership: %v", collectionName, acquireErr)
+					slog.Error("Failed to acquire leadership",
+						"collection", collectionName,
+						"error", acquireErr)
 				} else if acquired {
 					isLeaderNow = true
 				}
@@ -63,18 +65,23 @@ func ManageCollection(
 			desiredRole := lo.If(isLeaderNow, "leader").Else("follower")
 
 			if desiredRole != currentRole {
-				log.Printf("[%s] Transitioning role from '%s' to '%s'", collectionName, currentRole, desiredRole)
+				slog.Info("Transitioning role",
+					"collection", collectionName,
+					"from", currentRole,
+					"to", desiredRole)
 
 				roleCancel()
 
 				currentRole = desiredRole
 
 				if currentRole == "leader" {
-					log.Printf("[%s] Starting leader change stream listener (Mongo->Postgres).", collectionName)
+					slog.Info("Starting change stream listener",
+						"collection", collectionName,
+						"direction", "Mongo->Postgres")
 					roleCtx, roleCancel = context.WithCancel(ctx)
 					go leader.StartChangeStreamListener(roleCtx, pgPool, mongoClient, mongoDBName, replicatedColl, &cfg.LeaderOptions)
 				} else {
-					log.Printf("[%s] Instance is a follower.", collectionName)
+					slog.Info("Instance is now a follower", "collection", collectionName)
 					roleCancel = func() {}
 					roleCtx = nil
 				}

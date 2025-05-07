@@ -3,7 +3,7 @@ package leader
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -43,7 +43,9 @@ func (e *LeaderElector) TryAcquire(ctx context.Context, collectionName string, l
 
 	acquired := cmdTag.RowsAffected() > 0
 	if acquired {
-		log.Printf("[%s] Acquired/Renewed leadership lease for %v", collectionName, leaseDuration)
+		slog.Info("Leadership lease acquired/renewed",
+			"collection", collectionName,
+			"duration", leaseDuration)
 	}
 
 	return acquired, nil
@@ -59,21 +61,25 @@ func (e *LeaderElector) Release(collectionName string) error {
 
 	cmdTag, err := e.pool.Exec(releaseCtx, sql, collectionName, e.instanceID)
 	if err != nil {
-		log.Printf("[%s] Error deleting leadership lease: %v", collectionName, err)
+		slog.Error("Failed to delete leadership lease",
+			"collection", collectionName,
+			"error", err)
 		return fmt.Errorf("failed to delete leadership record: %w", err)
 	}
 
 	if cmdTag.RowsAffected() > 0 {
-		log.Printf("[%s] Deleted leadership lease record.", collectionName)
+		slog.Info("Leadership lease released", "collection", collectionName)
 	} else {
-		log.Printf("[%s] Attempted to delete lease record, but was not the leader or record did not exist.", collectionName)
+		slog.Info("Leadership lease not found",
+			"collection", collectionName,
+			"note", "Not the leader or record did not exist")
 	}
 
 	return nil
 }
 
 func (e *LeaderElector) ReleaseAll() {
-	log.Printf("Deleting all leadership lease records held by instance %s...", e.instanceID)
+	slog.Info("Releasing all leadership leases", "instance_id", e.instanceID)
 	sql := `
 		DELETE FROM leader_locks
 		WHERE leader_id = $1;
@@ -83,9 +89,13 @@ func (e *LeaderElector) ReleaseAll() {
 
 	cmdTag, err := e.pool.Exec(releaseCtx, sql, e.instanceID)
 	if err != nil {
-		log.Printf("Error during ReleaseAll (delete) for instance %s: %v", e.instanceID, err)
+		slog.Error("Failed to release all leadership leases",
+			"instance_id", e.instanceID,
+			"error", err)
 	} else {
-		log.Printf("Finished deleting %d leadership lease records for instance %s.", cmdTag.RowsAffected(), e.instanceID)
+		slog.Info("Leadership leases released",
+			"instance_id", e.instanceID,
+			"count", cmdTag.RowsAffected())
 	}
 }
 
@@ -100,10 +110,14 @@ func (e *LeaderElector) IsLeader(collectionName string, leaseDuration time.Durat
 
 	cmdTag, err := e.pool.Exec(extendCtx, extendSql, collectionName, e.instanceID, leaseSeconds)
 	if err != nil {
-		log.Printf("[%s] Failed to extend leadership lease (but was leader): %v", collectionName, err)
+		slog.Error("Failed to extend leadership lease",
+			"collection", collectionName,
+			"error", err)
 		return false
 	} else if cmdTag.RowsAffected() == 0 {
-		log.Printf("[%s] Was leader, but failed to extend lease (0 rows affected). Lease might have just expired.", collectionName)
+		slog.Warn("Leadership lease extension failed",
+			"collection", collectionName,
+			"reason", "Lease might have expired")
 		return false
 	}
 

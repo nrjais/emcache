@@ -2,7 +2,7 @@ package tests
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"testing"
 	"time"
@@ -27,25 +27,27 @@ func TestMain(m *testing.M) {
 	ctx := context.Background()
 	var err error
 
-	log.Printf("Connecting to MongoDB at %s...", mongoURI)
+	slog.Info("Connecting to MongoDB", "uri", mongoURI)
 	clientOptions := options.Client().ApplyURI(mongoURI)
 	mongoClient, err = mongo.Connect(ctx, clientOptions)
 	if err != nil {
-		log.Fatalf("Could not connect to mongo: %v", err)
+		slog.Error("Could not connect to mongo", "error", err)
+		os.Exit(1)
 	}
 	defer func() {
 		if err = mongoClient.Disconnect(ctx); err != nil {
-			log.Printf("Could not disconnect mongo client: %v", err)
+			slog.Error("Could not disconnect mongo client", "error", err)
 		}
 	}()
 	if err = mongoClient.Ping(ctx, nil); err != nil {
-		log.Fatalf("Could not ping mongo: %v", err)
+		slog.Error("Could not ping mongo", "error", err)
+		os.Exit(1)
 	}
-	log.Println("Successfully connected to MongoDB")
+	slog.Info("Successfully connected to MongoDB")
 
-	log.Println("Starting E2E tests...")
+	slog.Info("Starting E2E tests")
 	code := m.Run()
-	log.Println("E2E tests finished.")
+	slog.Info("E2E tests finished")
 
 	os.Exit(code)
 }
@@ -66,7 +68,8 @@ func TestInitialSync(t *testing.T) {
 
 	verifyDocsInSQLite(t, emcacheClient, collectionName, initialDocsMap)
 
-	log.Printf("[%s] Initial sync verification successful!", t.Name())
+	slog.Info("Initial sync verification successful",
+		"test", t.Name())
 }
 
 func TestInsertSync(t *testing.T) {
@@ -89,7 +92,9 @@ func TestInsertSync(t *testing.T) {
 		TestDoc{ID: uuid.NewString(), Name: "David", Age: 40},
 	}
 
-	log.Printf("[%s] Inserting %d new documents into MongoDB...", t.Name(), len(newDocs))
+	slog.Info("Inserting new documents into MongoDB",
+		"test", t.Name(),
+		"count", len(newDocs))
 	collection := mongoClient.Database("test").Collection(collectionName)
 	_, err = collection.InsertMany(ctx, newDocs)
 	require.NoError(t, err, "Failed to insert new documents into MongoDB")
@@ -99,17 +104,21 @@ func TestInsertSync(t *testing.T) {
 		expectedDocs[d.ID] = d
 	}
 
-	log.Printf("[%s] Waiting for oplog propagation...", t.Name())
+	slog.Info("Waiting for oplog propagation",
+		"test", t.Name())
 	time.Sleep(5 * time.Second)
 
-	log.Printf("[%s] Calling SyncToLatest...", t.Name())
+	slog.Info("Calling SyncToLatest",
+		"test", t.Name())
 	err = emcacheClient.SyncToLatest(ctx, 10)
 	require.NoError(t, err, "Failed to sync client to latest")
 
-	log.Printf("[%s] Verifying all documents in Client DB...", t.Name())
+	slog.Info("Verifying all documents in Client DB",
+		"test", t.Name())
 	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
 
-	log.Printf("[%s] Insert sync verification successful!", t.Name())
+	slog.Info("Insert sync verification successful",
+		"test", t.Name())
 }
 
 func TestUpdateSync(t *testing.T) {
@@ -135,7 +144,9 @@ func TestUpdateSync(t *testing.T) {
 	updatedName := "Updated " + docToUpdate.Name
 	updatedAge := docToUpdate.Age + 10
 
-	log.Printf("[%s] Updating document ID %s in MongoDB...", t.Name(), docToUpdate.ID)
+	slog.Info("Updating document in MongoDB",
+		"test", t.Name(),
+		"doc_id", docToUpdate.ID)
 	collection := mongoClient.Database("test").Collection(collectionName)
 	filter := bson.M{"_id": docToUpdate.ID}
 	update := bson.M{"$set": bson.M{"name": updatedName, "age": updatedAge}}
@@ -144,17 +155,21 @@ func TestUpdateSync(t *testing.T) {
 
 	expectedDocs[docToUpdate.ID] = TestDoc{ID: docToUpdate.ID, Name: updatedName, Age: updatedAge}
 
-	log.Printf("[%s] Waiting for oplog propagation...", t.Name())
+	slog.Info("Waiting for oplog propagation",
+		"test", t.Name())
 	time.Sleep(5 * time.Second)
 
-	log.Printf("[%s] Calling SyncToLatest...", t.Name())
+	slog.Info("Calling SyncToLatest",
+		"test", t.Name())
 	err = emcacheClient.SyncToLatest(ctx, 10)
 	require.NoError(t, err, "Failed to sync client to latest")
 
-	log.Printf("[%s] Verifying updated documents in Client DB...", t.Name())
+	slog.Info("Verifying updated documents in Client DB",
+		"test", t.Name())
 	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
 
-	log.Printf("[%s] Update sync verification successful!", t.Name())
+	slog.Info("Update sync verification successful",
+		"test", t.Name())
 }
 
 func TestDeleteSync(t *testing.T) {
@@ -179,7 +194,9 @@ func TestDeleteSync(t *testing.T) {
 
 	collection := mongoClient.Database("test").Collection(collectionName)
 	for _, doc := range docsToDelete {
-		log.Printf("[%s] Deleting document ID %s from MongoDB...", t.Name(), doc.ID)
+		slog.Info("Deleting document from MongoDB",
+			"test", t.Name(),
+			"doc_id", doc.ID)
 		filter := bson.M{"_id": doc.ID}
 		_, err = collection.DeleteOne(ctx, filter)
 		require.NoError(t, err, "Failed to delete document ID %s from MongoDB", doc.ID)
@@ -187,17 +204,21 @@ func TestDeleteSync(t *testing.T) {
 		delete(expectedDocs, doc.ID)
 	}
 
-	log.Printf("[%s] Waiting for oplog propagation...", t.Name())
+	slog.Info("Waiting for oplog propagation",
+		"test", t.Name())
 	time.Sleep(5 * time.Second)
 
-	log.Printf("[%s] Calling SyncToLatest...", t.Name())
+	slog.Info("Calling SyncToLatest",
+		"test", t.Name())
 	err = emcacheClient.SyncToLatest(ctx, 10)
 	require.NoError(t, err, "Failed to sync client to latest")
 
-	log.Printf("[%s] Verifying documents after deletion in Client DB...", t.Name())
+	slog.Info("Verifying documents after deletion in Client DB",
+		"test", t.Name())
 	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
 
-	log.Printf("[%s] Delete sync verification successful!", t.Name())
+	slog.Info("Delete sync verification successful",
+		"test", t.Name())
 }
 
 func TestUpsertSync(t *testing.T) {
@@ -226,7 +247,9 @@ func TestUpsertSync(t *testing.T) {
 	updatedAge := docToUpdate.Age + 5
 	updatedDoc := TestDoc{ID: docToUpdate.ID, Name: updatedName, Age: updatedAge}
 	filterUpdate := bson.M{"_id": docToUpdate.ID}
-	log.Printf("[%s] Upserting (update) document ID %s in MongoDB...", t.Name(), docToUpdate.ID)
+	slog.Info("Upserting (update) document in MongoDB",
+		"test", t.Name(),
+		"doc_id", docToUpdate.ID)
 	_, err = collection.ReplaceOne(ctx, filterUpdate, updatedDoc, upsertOpts)
 	require.NoError(t, err, "Failed to upsert (update) document ID %s", docToUpdate.ID)
 	expectedDocs[docToUpdate.ID] = updatedDoc
@@ -234,20 +257,23 @@ func TestUpsertSync(t *testing.T) {
 	newDocID := uuid.NewString()
 	newDoc := TestDoc{ID: newDocID, Name: "New Upserted Doc", Age: 55}
 	filterInsert := bson.M{"_id": newDocID}
-	log.Printf("[%s] Upserting (insert) document ID %s in MongoDB...", t.Name(), newDocID)
+	slog.Info("Upserting (insert) document in MongoDB",
+		"test", t.Name(),
+		"doc_id", newDocID)
 	_, err = collection.ReplaceOne(ctx, filterInsert, newDoc, upsertOpts)
 	require.NoError(t, err, "Failed to upsert (insert) document ID %s", newDocID)
 	expectedDocs[newDocID] = newDoc
 
-	log.Printf("[%s] Waiting for oplog propagation...", t.Name())
+	slog.Info("Waiting for oplog propagation",
+		"test", t.Name())
 	time.Sleep(5 * time.Second)
 
-	log.Printf("[%s] Calling SyncToLatest...", t.Name())
+	slog.Info("Calling SyncToLatest",
+		"test", t.Name())
 	err = emcacheClient.SyncToLatest(ctx, 10)
 	require.NoError(t, err, "Failed to sync client to latest")
 
-	log.Printf("[%s] Verifying documents after upserts in Client DB...", t.Name())
+	slog.Info("Verifying documents after upserts in Client DB",
+		"test", t.Name())
 	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
-
-	log.Printf("[%s] Upsert sync verification successful!", t.Name())
 }

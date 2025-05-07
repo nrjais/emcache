@@ -4,7 +4,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/pgx/v5"
@@ -17,7 +17,7 @@ import (
 var MigrationsFS embed.FS
 
 func RunMigrations(pool *pgxpool.Pool) error {
-	log.Println("Running database migrations from embedded files...")
+	slog.Info("Running database migrations from embedded files")
 
 	sourceInstance, err := iofs.New(MigrationsFS, "postgres")
 	if err != nil {
@@ -44,25 +44,25 @@ func RunMigrations(pool *pgxpool.Pool) error {
 
 	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		if srcErr != nil {
-			log.Printf("Warning: error closing migration source after migration failure: %v", srcErr)
+			slog.Warn("Error closing migration source after migration failure", "error", srcErr)
 		}
 		if dbErr != nil {
-			log.Printf("Warning: error closing migration database connection after migration failure: %v", dbErr)
+			slog.Warn("Error closing migration database connection after migration failure", "error", dbErr)
 		}
 		return fmt.Errorf("migration failed: %w", err)
 	}
 
 	if srcErr != nil {
-		log.Printf("Warning: error closing migration source: %v", srcErr)
+		slog.Warn("Error closing migration source", "error", srcErr)
 	}
 	if dbErr != nil {
-		log.Printf("Warning: error closing migration database connection: %v", dbErr)
+		slog.Warn("Error closing migration database connection", "error", dbErr)
 	}
 
 	if errors.Is(err, migrate.ErrNoChange) {
-		log.Println("No database schema changes to apply.")
+		slog.Info("No database schema changes to apply")
 	} else {
-		log.Println("Database migrations completed successfully.")
+		slog.Info("Database migrations completed successfully")
 	}
 
 	return nil
@@ -71,7 +71,7 @@ func RunMigrations(pool *pgxpool.Pool) error {
 type migrateLogAdapter struct{}
 
 func (l *migrateLogAdapter) Printf(format string, v ...any) {
-	log.Printf(format, v...)
+	slog.Info(fmt.Sprintf(format, v...))
 }
 
 func (l *migrateLogAdapter) Verbose() bool {

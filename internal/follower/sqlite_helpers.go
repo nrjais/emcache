@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -57,7 +57,10 @@ func openCollectionDB(collectionName, sqliteBaseDir, dbPath string, version int,
 		return nil, fmt.Errorf("failed to ensure data table/indexes in %s: %w", dbPath, err)
 	}
 
-	log.Printf("[%s] Opened SQLite Conn: %s (Version: %d)", collectionName, dbPath, version)
+	slog.Info("SQLite connection opened",
+		"collection", collectionName,
+		"path", dbPath,
+		"version", version)
 	return conn, nil
 }
 
@@ -76,7 +79,9 @@ func GetOrResetLocalDBVersion(conn *sqlite.Conn, version int) (bool, error) {
 			var scanErr error
 			storedVersion, scanErr = strconv.Atoi(value)
 			if scanErr != nil {
-				log.Printf("Error parsing stored local DB version '%s': %v", value, scanErr)
+				slog.Error("Failed to parse stored local DB version",
+					"value", value,
+					"error", scanErr)
 				return nil
 			}
 			found = true
@@ -85,7 +90,7 @@ func GetOrResetLocalDBVersion(conn *sqlite.Conn, version int) (bool, error) {
 	})
 
 	if err != nil {
-		log.Printf("Error querying local DB version: %v", err)
+		slog.Error("Failed to query local DB version", "error", err)
 		return false, fmt.Errorf("error querying local DB version: %w", err)
 	}
 
@@ -94,9 +99,11 @@ func GetOrResetLocalDBVersion(conn *sqlite.Conn, version int) (bool, error) {
 	}
 
 	if version != storedVersion {
-		log.Printf("Version mismatch in existing file (found %d, expected %d), resetting to %d", storedVersion, version, version)
+		slog.Warn("Version mismatch in existing file",
+			"found_version", storedVersion,
+			"expected_version", version)
 		if err := sqlitex.Execute(conn, fmt.Sprintf("DELETE FROM %s WHERE key = ?", metadataTableName), &sqlitex.ExecOptions{Args: []any{lastAppliedIdxKey}}); err != nil {
-			log.Printf("Failed to clear last applied index during version reset: %v", err)
+			slog.Error("Failed to clear last applied index during version reset", "error", err)
 		}
 		return true, setLocalDBVersion(conn, version)
 	}
@@ -237,7 +244,9 @@ func applyOplogEntry(conn *sqlite.Conn, entry db.OplogEntry, collShape shape.Sha
 
 	if entry.Operation == "UPSERT" {
 		if entry.Doc == nil {
-			log.Printf("Warning: UPSERT operation missing document data for ID %s, collection %s. Skipping apply.", entry.DocID, entry.Collection)
+			slog.Warn("UPSERT operation missing document data",
+				"doc_id", entry.DocID,
+				"collection", entry.Collection)
 			return nil
 		}
 
