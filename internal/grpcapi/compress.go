@@ -3,9 +3,11 @@ package grpcapi
 import (
 	"fmt"
 	"io"
+	"log/slog"
 
 	"compress/gzip"
 
+	"github.com/dustin/go-humanize"
 	"github.com/klauspost/compress/zstd"
 	pb "github.com/nrjais/emcache/pkg/protos"
 )
@@ -29,10 +31,12 @@ func compressAndSendStream(
 }
 
 func sendChunks(reader io.Reader, stream pb.EmcacheService_DownloadDbServer, chunkSize int, desc string) error {
+	totalSent := uint64(0)
 	buffer := make([]byte, chunkSize)
 	for {
 		n, err := reader.Read(buffer)
 		if n > 0 {
+			totalSent += uint64(n)
 			data := &pb.DownloadDbResponse{Chunk: buffer[:n]}
 			if sendErr := stream.Send(data); sendErr != nil {
 				return fmt.Errorf("failed to stream %s database chunk: %w", desc, sendErr)
@@ -45,6 +49,8 @@ func sendChunks(reader io.Reader, stream pb.EmcacheService_DownloadDbServer, chu
 			return fmt.Errorf("failed to read data for %s streaming: %w", desc, err)
 		}
 	}
+
+	slog.Info("Total size of data sent: %s, for %s", humanize.Bytes(totalSent), desc)
 	return nil
 }
 
