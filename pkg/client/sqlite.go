@@ -127,21 +127,24 @@ func valueFromProto(v *structpb.Value) any {
 	case *structpb.Value_StringValue:
 		return k.StringValue
 	case *structpb.Value_BoolValue:
-		return k.BoolValue
+		if k.BoolValue {
+			return 1
+		}
+		return 0
 	case *structpb.Value_StructValue:
 		jsonBytes, err := k.StructValue.MarshalJSON()
 		if err != nil {
 			// TODO: Log or handle error
 			return nil
 		}
-		return string(jsonBytes)
+		return jsonBytes
 	case *structpb.Value_ListValue:
 		jsonBytes, err := k.ListValue.MarshalJSON()
 		if err != nil {
 			// TODO: Log or handle error
 			return nil
 		}
-		return string(jsonBytes)
+		return jsonBytes
 	default:
 		return nil
 	}

@@ -225,9 +225,7 @@ type ReplicatedCollection struct {
 }
 
 func AddReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collectionName string, shapeJSON []byte) error {
-	sql := `
-        INSERT INTO replicated_collections (collection_name, current_version, shape)
-        VALUES ($1, 1, $2)`
+	sql := `INSERT INTO replicated_collections (collection_name, shape) VALUES ($1, $2)`
 	_, err := pool.Exec(ctx, sql, collectionName, shapeJSON)
 	if err != nil {
 		var pgErr *pgconn.PgError

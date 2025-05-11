@@ -174,11 +174,11 @@ func mapShapeTypeToSQLite(dt shape.DataType) string {
 	case shape.Text:
 		return "TEXT"
 	case shape.JSONB:
-		return "JSONB"
+		return "BLOB"
 	case shape.Any:
-		return "ANY"
+		return "BLOB"
 	default:
-		return "ANY"
+		return "BLOB"
 	}
 }
 
@@ -196,7 +196,7 @@ func ensureCollectionTableAndIndexes(conn *sqlite.Conn, collShape shape.Shape) e
 
 	for _, col := range collShape.Columns {
 		if col.Name == "id" {
-			return fmt.Errorf("column name 'id' is reserved and implicitly created from source '_id'")
+			return fmt.Errorf("column name 'id' is reserved and implicitly created")
 		}
 		if _, exists := colNames[col.Name]; exists {
 			return fmt.Errorf("duplicate column name defined in shape: %s", col.Name)
@@ -239,6 +239,33 @@ func ensureCollectionTableAndIndexes(conn *sqlite.Conn, collShape shape.Shape) e
 	return nil
 }
 
+func mapValueToSqlite(value any) any {
+	if value == nil {
+		return nil
+	}
+	switch v := value.(type) {
+	case string:
+		return v
+	case int64:
+		return v
+	case float64:
+		return v
+	case bool:
+		if v {
+			return 1
+		}
+		return 0
+	case []byte:
+		return v
+	default:
+		jsonBytes, err := json.Marshal(v)
+		if err != nil {
+			return nil
+		}
+		return jsonBytes
+	}
+}
+
 func applyOplogEntry(conn *sqlite.Conn, entry db.OplogEntry, collShape shape.Shape) error {
 	idColNameQuoted := quoteIdentifier("id")
 
@@ -266,7 +293,7 @@ func applyOplogEntry(conn *sqlite.Conn, entry db.OplogEntry, collShape shape.Sha
 		for _, shapeCol := range collShape.Columns {
 			cols = append(cols, quoteIdentifier(shapeCol.Name))
 			placeholders = append(placeholders, "?")
-			args = append(args, data[shapeCol.Name])
+			args = append(args, mapValueToSqlite(data[shapeCol.Name]))
 		}
 
 		sql := fmt.Sprintf("INSERT OR REPLACE INTO %s (%s) VALUES (%s)",

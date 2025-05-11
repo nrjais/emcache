@@ -2,6 +2,7 @@ package follower
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -20,6 +21,8 @@ import (
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
 )
+
+var ErrCollectionNotFound = errors.New("collection not found")
 
 type conn struct {
 	conn  *sqlite.Conn
@@ -161,10 +164,11 @@ func (cf *MainFollower) runMainLoop(ctx context.Context, wg *sync.WaitGroup) {
 			for colVersion, entries := range entriesByCollection {
 				conn, err := cf.getOrCreateConnection(ctx, colVersion.collectionName, colVersion.version)
 				if err != nil {
-					slog.Error("Failed to get/create SQLite connection",
-						"collection", colVersion.collectionName,
-						"version", colVersion.version,
-						"error", err)
+					if errors.Is(err, ErrCollectionNotFound) {
+						slog.Error("Collection not found, skipping batch", "collection", colVersion.collectionName, "version", colVersion.version)
+						continue
+					}
+					slog.Error("Failed to get/create SQLite connection", "collection", colVersion.collectionName, "version", colVersion.version, "error", err)
 					batchFailed = true
 					break
 				}
@@ -244,16 +248,19 @@ func (cf *MainFollower) getOrCreateConnection(ctx context.Context, collectionNam
 	defer cf.connMutex.Unlock()
 
 	dbKey := fmt.Sprintf("%s_v%d", collectionName, version)
-	dbPath := GetCollectionDBPath(collectionName, cf.sqliteBaseDir, version)
-
 	if conn, exists := cf.connections[dbKey]; exists {
 		return conn, nil
 	}
 
-	replicatedColl, found := cf.collCache.GetCollectionRefresh(ctx, collectionName)
+	dbPath := GetCollectionDBPath(collectionName, cf.sqliteBaseDir, version)
+	replicatedColl, found, err := cf.collCache.GetCollectionRefresh(ctx, collectionName)
+	if err != nil {
+		slog.Error("Failed to get collection", "collection", collectionName, "error", err)
+		return conn{}, err
+	}
 	if !found {
 		slog.Error("Collection not found", "collection", collectionName)
-		return conn{}, fmt.Errorf("collection '%s' not found. collection might have been removed", collectionName)
+		return conn{}, ErrCollectionNotFound
 	}
 
 	slog.Info("Opening connection for", "collection", collectionName, "at", dbPath)

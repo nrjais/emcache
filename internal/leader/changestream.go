@@ -30,7 +30,13 @@ func getValueByDotPath(data map[string]any, path string) any {
 	for _, part := range parts {
 		mapCurrent, ok := current.(map[string]any)
 		if !ok {
-			return nil
+			mapCurrent := current.(primitive.M)
+			value, exists := mapCurrent[part]
+			if !exists {
+				return nil
+			}
+			current = value
+			continue
 		}
 		value, exists := mapCurrent[part]
 		if !exists {

@@ -68,9 +68,9 @@ func (s *server) DownloadDb(req *pb.DownloadDbRequest, stream pb.EmcacheService_
 	}
 
 	slog.Info("Using requested compression", "collection", collectionName, "compression", requestedCompression)
-	replicatedColl, found := s.collCache.GetCollectionRefresh(ctx, collectionName)
-	if !found {
-		slog.Error("Collection not found in cache", "collection", collectionName)
+	replicatedColl, found, err := s.collCache.GetCollectionRefresh(ctx, collectionName)
+	if err != nil || !found {
+		slog.Error("Failed to get collection", "collection", collectionName, "error", err)
 		return status.Error(codes.Internal, "Failed to get current collection version")
 	}
 	currentVersion := replicatedColl.CurrentVersion

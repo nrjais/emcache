@@ -112,11 +112,14 @@ func (m *Manager) GetAllCollections() []db.ReplicatedCollection {
 	return list
 }
 
-func (m *Manager) GetCollectionRefresh(ctx context.Context, name string) (db.ReplicatedCollection, bool) {
+func (m *Manager) GetCollectionRefresh(ctx context.Context, name string) (db.ReplicatedCollection, bool, error) {
 	col, found := m.GetCollection(name)
 	if !found {
-		m.refresh(ctx)
+		err := m.refresh(ctx)
+		if err != nil {
+			return db.ReplicatedCollection{}, false, err
+		}
 		col, found = m.GetCollection(name)
 	}
-	return col, found
+	return col, found, nil
 }

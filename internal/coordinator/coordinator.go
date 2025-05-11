@@ -64,8 +64,7 @@ func (c *Coordinator) Start(ctx context.Context) {
 					"component", "Coordinator",
 					"error", err)
 			}
-			slog.Info("Periodic collection sync finished",
-				"component", "Coordinator")
+			slog.Info("Periodic collection sync finished", "component", "Coordinator")
 		}
 	}
 }

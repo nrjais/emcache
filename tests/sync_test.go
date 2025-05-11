@@ -2,10 +2,10 @@ package tests
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -27,7 +27,6 @@ func TestMain(m *testing.M) {
 	ctx := context.Background()
 	var err error
 
-	slog.Info("Connecting to MongoDB", "uri", mongoURI)
 	clientOptions := options.Client().ApplyURI(mongoURI)
 	mongoClient, err = mongo.Connect(ctx, clientOptions)
 	if err != nil {
@@ -43,18 +42,33 @@ func TestMain(m *testing.M) {
 		slog.Error("Could not ping mongo", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("Successfully connected to MongoDB")
 
-	slog.Info("Starting E2E tests")
 	code := m.Run()
-	slog.Info("E2E tests finished")
 
 	os.Exit(code)
 }
 
+func setupTestCollection(t *testing.T, numDocs int) (string, []TestDoc, *mongo.Collection, map[string]TestDoc) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	collectionName := fmt.Sprintf("test_%s_%s", t.Name(), uniqueId)
+	initialDocsSlice, _ := setupSyncedCollection(t, ctx, numDocs, collectionName)
+
+	expectedDocs := make(map[string]TestDoc)
+	for _, doc := range initialDocsSlice {
+		expectedDocs[doc.ID] = doc
+	}
+
+	collection := mongoClient.Database(mongoDBName).Collection(collectionName)
+
+	return collectionName, initialDocsSlice, collection, expectedDocs
+}
+
 func TestInitialSync(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
 	collectionName := "test_initial_sync_" + uniqueId
@@ -67,35 +81,22 @@ func TestInitialSync(t *testing.T) {
 	}
 
 	verifyDocsInSQLite(t, emcacheClient, collectionName, initialDocsMap)
-
-	slog.Info("Initial sync verification successful",
-		"test", t.Name())
 }
 
 func TestInsertSync(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	numInitial := 1
-	collectionName := "test_insert_sync_" + uniqueId
-	initialDocsSlice, emcacheClient := setupSyncedCollection(t, ctx, numInitial, collectionName)
-
-	var err error
-	expectedDocs := make(map[string]TestDoc)
-	for _, doc := range initialDocsSlice {
-		expectedDocs[doc.ID] = doc
-	}
+	collectionName, _, collection, expectedDocs := setupTestCollection(t, 1)
+	emcacheClient, err := createClient(t, ctx, collectionName)
+	require.NoError(t, err, "Failed to create emcache client")
 
 	newDocs := []any{
 		TestDoc{ID: uuid.NewString(), Name: "Charlie", Age: 35},
 		TestDoc{ID: uuid.NewString(), Name: "David", Age: 40},
 	}
 
-	slog.Info("Inserting new documents into MongoDB",
-		"test", t.Name(),
-		"count", len(newDocs))
-	collection := mongoClient.Database("test").Collection(collectionName)
 	_, err = collection.InsertMany(ctx, newDocs)
 	require.NoError(t, err, "Failed to insert new documents into MongoDB")
 
@@ -104,50 +105,23 @@ func TestInsertSync(t *testing.T) {
 		expectedDocs[d.ID] = d
 	}
 
-	slog.Info("Waiting for oplog propagation",
-		"test", t.Name())
-	time.Sleep(5 * time.Second)
-
-	slog.Info("Calling SyncToLatest",
-		"test", t.Name())
-	err = emcacheClient.SyncToLatest(ctx, 10)
-	require.NoError(t, err, "Failed to sync client to latest")
-
-	slog.Info("Verifying all documents in Client DB",
-		"test", t.Name())
+	syncToLatest(t, emcacheClient)
 	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
-
-	slog.Info("Insert sync verification successful",
-		"test", t.Name())
 }
 
 func TestUpdateSync(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	numInitial := 2
-	collectionName := "test_update_sync_" + uniqueId
-	initialDocsSlice, emcacheClient := setupSyncedCollection(t, ctx, numInitial, collectionName)
+	collectionName, initialDocs, collection, expectedDocs := setupTestCollection(t, 2)
+	emcacheClient, err := createClient(t, ctx, collectionName)
+	require.NoError(t, err, "Failed to create emcache client")
 
-	var err error
-	expectedDocs := make(map[string]TestDoc)
-	var docToUpdate TestDoc
-	for i, doc := range initialDocsSlice {
-		expectedDocs[doc.ID] = doc
-		if i == 0 {
-			docToUpdate = doc
-		}
-	}
-	require.NotEmpty(t, docToUpdate.ID, "Should have selected a document to update")
-
+	docToUpdate := initialDocs[0]
 	updatedName := "Updated " + docToUpdate.Name
 	updatedAge := docToUpdate.Age + 10
 
-	slog.Info("Updating document in MongoDB",
-		"test", t.Name(),
-		"doc_id", docToUpdate.ID)
-	collection := mongoClient.Database("test").Collection(collectionName)
 	filter := bson.M{"_id": docToUpdate.ID}
 	update := bson.M{"$set": bson.M{"name": updatedName, "age": updatedAge}}
 	_, err = collection.UpdateOne(ctx, filter, update)
@@ -155,125 +129,272 @@ func TestUpdateSync(t *testing.T) {
 
 	expectedDocs[docToUpdate.ID] = TestDoc{ID: docToUpdate.ID, Name: updatedName, Age: updatedAge}
 
-	slog.Info("Waiting for oplog propagation",
-		"test", t.Name())
-	time.Sleep(5 * time.Second)
-
-	slog.Info("Calling SyncToLatest",
-		"test", t.Name())
-	err = emcacheClient.SyncToLatest(ctx, 10)
-	require.NoError(t, err, "Failed to sync client to latest")
-
-	slog.Info("Verifying updated documents in Client DB",
-		"test", t.Name())
+	syncToLatest(t, emcacheClient)
 	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
-
-	slog.Info("Update sync verification successful",
-		"test", t.Name())
 }
 
 func TestDeleteSync(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	numInitial := 3
-	collectionName := "test_delete_sync_" + uniqueId
-	initialDocsSlice, emcacheClient := setupSyncedCollection(t, ctx, numInitial, collectionName)
+	collectionName, initialDocs, collection, expectedDocs := setupTestCollection(t, 3)
+	emcacheClient, err := createClient(t, ctx, collectionName)
+	require.NoError(t, err, "Failed to create emcache client")
 
-	var err error // Declare err for the function scope
-	expectedDocs := make(map[string]TestDoc)
-	var docsToDelete []TestDoc
-	for i, doc := range initialDocsSlice {
-		expectedDocs[doc.ID] = doc
-		if i < 2 {
-			docsToDelete = append(docsToDelete, doc)
-		}
-	}
+	docsToDelete := initialDocs[:2]
 	require.Len(t, docsToDelete, 2, "Should have selected documents to delete")
 
-	collection := mongoClient.Database("test").Collection(collectionName)
 	for _, doc := range docsToDelete {
-		slog.Info("Deleting document from MongoDB",
-			"test", t.Name(),
-			"doc_id", doc.ID)
 		filter := bson.M{"_id": doc.ID}
 		_, err = collection.DeleteOne(ctx, filter)
-		require.NoError(t, err, "Failed to delete document ID %s from MongoDB", doc.ID)
+		require.NoError(t, err, "Failed to delete document from MongoDB")
 
 		delete(expectedDocs, doc.ID)
 	}
 
-	slog.Info("Waiting for oplog propagation",
-		"test", t.Name())
-	time.Sleep(5 * time.Second)
-
-	slog.Info("Calling SyncToLatest",
-		"test", t.Name())
-	err = emcacheClient.SyncToLatest(ctx, 10)
-	require.NoError(t, err, "Failed to sync client to latest")
-
-	slog.Info("Verifying documents after deletion in Client DB",
-		"test", t.Name())
+	syncToLatest(t, emcacheClient)
 	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
-
-	slog.Info("Delete sync verification successful",
-		"test", t.Name())
 }
 
 func TestUpsertSync(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	numInitial := 2
-	collectionName := "test_upsert_sync_" + uniqueId
-	initialDocsSlice, emcacheClient := setupSyncedCollection(t, ctx, numInitial, collectionName)
+	collectionName, initialDocs, collection, expectedDocs := setupTestCollection(t, 2)
+	emcacheClient, err := createClient(t, ctx, collectionName)
+	require.NoError(t, err, "Failed to create emcache client")
 
-	var err error
-	expectedDocs := make(map[string]TestDoc)
-	var docToUpdate TestDoc
-	for i, doc := range initialDocsSlice {
-		expectedDocs[doc.ID] = doc
-		if i == 0 {
-			docToUpdate = doc
-		}
-	}
-
-	collection := mongoClient.Database("test").Collection(collectionName)
-	upsertOpts := options.Replace().SetUpsert(true)
-
+	docToUpdate := initialDocs[0]
 	updatedName := "Upserted " + docToUpdate.Name
 	updatedAge := docToUpdate.Age + 5
 	updatedDoc := TestDoc{ID: docToUpdate.ID, Name: updatedName, Age: updatedAge}
+
+	upsertOpts := options.Replace().SetUpsert(true)
 	filterUpdate := bson.M{"_id": docToUpdate.ID}
-	slog.Info("Upserting (update) document in MongoDB",
-		"test", t.Name(),
-		"doc_id", docToUpdate.ID)
+
 	_, err = collection.ReplaceOne(ctx, filterUpdate, updatedDoc, upsertOpts)
-	require.NoError(t, err, "Failed to upsert (update) document ID %s", docToUpdate.ID)
+	require.NoError(t, err, "Failed to upsert (update) document")
 	expectedDocs[docToUpdate.ID] = updatedDoc
 
 	newDocID := uuid.NewString()
 	newDoc := TestDoc{ID: newDocID, Name: "New Upserted Doc", Age: 55}
 	filterInsert := bson.M{"_id": newDocID}
-	slog.Info("Upserting (insert) document in MongoDB",
-		"test", t.Name(),
-		"doc_id", newDocID)
+
 	_, err = collection.ReplaceOne(ctx, filterInsert, newDoc, upsertOpts)
-	require.NoError(t, err, "Failed to upsert (insert) document ID %s", newDocID)
+	require.NoError(t, err, "Failed to upsert (insert) document")
 	expectedDocs[newDocID] = newDoc
 
-	slog.Info("Waiting for oplog propagation",
-		"test", t.Name())
-	time.Sleep(5 * time.Second)
-
-	slog.Info("Calling SyncToLatest",
-		"test", t.Name())
-	err = emcacheClient.SyncToLatest(ctx, 10)
-	require.NoError(t, err, "Failed to sync client to latest")
-
-	slog.Info("Verifying documents after upserts in Client DB",
-		"test", t.Name())
+	syncToLatest(t, emcacheClient)
 	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
+}
+
+func TestPartialUpdateSync(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	collectionName, initialDocs, collection, expectedDocs := setupTestCollection(t, 3)
+	emcacheClient, err := createClient(t, ctx, collectionName)
+	require.NoError(t, err, "Failed to create emcache client")
+
+	docToUpdate := initialDocs[0]
+	filter := bson.M{"_id": docToUpdate.ID}
+
+	updatedName := "Partially Updated " + docToUpdate.Name
+	update := bson.M{"$set": bson.M{"name": updatedName}}
+	_, err = collection.UpdateOne(ctx, filter, update)
+	require.NoError(t, err, "Failed to partially update document")
+
+	expectedDocs[docToUpdate.ID] = TestDoc{ID: docToUpdate.ID, Name: updatedName, Age: docToUpdate.Age}
+	syncToLatest(t, emcacheClient)
+	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
+
+	updatedAge := docToUpdate.Age + 15
+	update = bson.M{"$set": bson.M{"age": updatedAge}}
+	_, err = collection.UpdateOne(ctx, filter, update)
+	require.NoError(t, err, "Failed to partially update document")
+
+	expectedDocs[docToUpdate.ID] = TestDoc{ID: docToUpdate.ID, Name: updatedName, Age: updatedAge}
+	syncToLatest(t, emcacheClient)
+	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
+
+}
+
+func TestDeleteAllSync(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	collectionName, _, collection, _ := setupTestCollection(t, 5)
+	emcacheClient, err := createClient(t, ctx, collectionName)
+	require.NoError(t, err, "Failed to create emcache client")
+
+	filter := bson.M{}
+	_, err = collection.DeleteMany(ctx, filter)
+	require.NoError(t, err, "Failed to delete all documents from MongoDB")
+
+	expectedDocs := make(map[string]TestDoc)
+
+	syncToLatest(t, emcacheClient)
+	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
+}
+
+func TestBulkInsertSync(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	collectionName, _, collection, expectedDocs := setupTestCollection(t, 2)
+	emcacheClient, err := createClient(t, ctx, collectionName)
+	require.NoError(t, err, "Failed to create emcache client")
+
+	bulkSize := 100
+	newDocs := make([]any, bulkSize)
+	for i := 0; i < bulkSize; i++ {
+		doc := TestDoc{
+			ID:   uuid.NewString(),
+			Name: fmt.Sprintf("BulkDoc_%d", i),
+			Age:  30 + (i % 50),
+		}
+		newDocs[i] = doc
+		expectedDocs[doc.ID] = doc
+	}
+
+	_, err = collection.InsertMany(ctx, newDocs)
+	require.NoError(t, err, "Failed to insert bulk documents into MongoDB")
+
+	syncToLatest(t, emcacheClient)
+	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
+}
+
+func TestReplaceDocSync(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	collectionName, initialDocs, collection, expectedDocs := setupTestCollection(t, 3)
+	emcacheClient, err := createClient(t, ctx, collectionName)
+	require.NoError(t, err, "Failed to create emcache client")
+
+	docToReplace := initialDocs[1]
+	replacementDoc := TestDoc{
+		ID:   docToReplace.ID,
+		Name: "Completely Replaced Doc",
+		Age:  99,
+	}
+
+	filter := bson.M{"_id": docToReplace.ID}
+	_, err = collection.ReplaceOne(ctx, filter, replacementDoc)
+	require.NoError(t, err, "Failed to replace document in MongoDB")
+
+	expectedDocs[docToReplace.ID] = replacementDoc
+
+	syncToLatest(t, emcacheClient)
+	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
+}
+
+func TestNestedFieldsSync(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	collectionName := "test_nested_fields_sync_" + uniqueId
+
+	type Address struct {
+		Street string `bson:"street" json:"street"`
+		City   string `bson:"city" json:"city"`
+		Zip    string `bson:"zip" json:"zip"`
+	}
+
+	type ContactInfo struct {
+		Email   string  `bson:"email" json:"email"`
+		Phone   string  `bson:"phone" json:"phone"`
+		Address Address `bson:"address" json:"address"`
+	}
+
+	type NestedDoc struct {
+		ID          string      `bson:"_id" json:"_id"`
+		Name        string      `bson:"name" json:"name"`
+		Age         int         `bson:"age" json:"age"`
+		ContactInfo ContactInfo `bson:"contact_info" json:"contact_info"`
+		Tags        []string    `bson:"tags" json:"tags"`
+	}
+
+	docID := uuid.NewString()
+	nestedDoc := NestedDoc{
+		ID:   docID,
+		Name: "Nested Fields Test",
+		Age:  30,
+		ContactInfo: ContactInfo{
+			Email: "test@example.com",
+			Phone: "555-1234",
+			Address: Address{
+				Street: "123 Main St",
+				City:   "Testville",
+				Zip:    "12345",
+			},
+		},
+		Tags: []string{"test", "nested", "document"},
+	}
+
+	emcacheClient := setupCollectionWithShapeAndDocs(t, ctx, collectionName, nestedFieldsDocShape(), []NestedDoc{nestedDoc})
+
+	collection := mongoClient.Database(mongoDBName).Collection(collectionName)
+
+	query := `SELECT id, name, age, email, phone, street, city, zip, tags FROM data WHERE id = ?`
+	rows, err := emcacheClient.Query(ctx, collectionName, query, docID)
+	require.NoError(t, err, "Failed to execute query via client")
+	defer rows.Close()
+
+	found := false
+	for rows.Next() {
+		var id, name, email, phone, street, city, zip, tags string
+		var age int
+
+		err := rows.Scan(&id, &name, &age, &email, &phone, &street, &city, &zip, &tags)
+		require.NoError(t, err, "Failed to scan row")
+
+		found = true
+		require.Equal(t, nestedDoc.Name, name, "Name field mismatch")
+		require.Equal(t, nestedDoc.Age, age, "Age field mismatch")
+		require.Equal(t, nestedDoc.ContactInfo.Email, email, "Email field mismatch")
+		require.Equal(t, nestedDoc.ContactInfo.Phone, phone, "Phone field mismatch")
+		require.Equal(t, nestedDoc.ContactInfo.Address.Street, street, "Street field mismatch")
+		require.Equal(t, nestedDoc.ContactInfo.Address.City, city, "City field mismatch")
+		require.Equal(t, nestedDoc.ContactInfo.Address.Zip, zip, "Zip field mismatch")
+
+		for _, tag := range nestedDoc.Tags {
+			require.Contains(t, tags, tag, "Tags field should contain tag %s", tag)
+		}
+	}
+	require.NoError(t, rows.Err(), "Error iterating rows")
+	require.True(t, found, "Document with nested fields not found in Client DB")
+
+	filter := bson.M{"_id": docID}
+	update := bson.M{"$set": bson.M{"contact_info.address.city": "New City"}}
+	_, err = collection.UpdateOne(ctx, filter, update)
+	require.NoError(t, err, "Failed to update nested field")
+
+	syncToLatest(t, emcacheClient)
+
+	rows, err = emcacheClient.Query(ctx, collectionName, query, docID)
+	require.NoError(t, err, "Failed to execute query via client")
+	defer rows.Close()
+
+	found = false
+	for rows.Next() {
+		var id, name, email, phone, street, city, zip, tags string
+		var age int
+
+		err := rows.Scan(&id, &name, &age, &email, &phone, &street, &city, &zip, &tags)
+		require.NoError(t, err, "Failed to scan row")
+
+		found = true
+		require.Equal(t, "New City", city, "Updated city field mismatch")
+	}
+	require.NoError(t, rows.Err(), "Error iterating rows")
+	require.True(t, found, "Document with updated nested field not found in Client DB")
+
 }
