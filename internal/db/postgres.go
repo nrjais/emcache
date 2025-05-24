@@ -3,11 +3,14 @@ package db
 import (
 	"context"
 	"fmt"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func GetOplogEntriesMultipleCollections(ctx context.Context, pool *pgxpool.Pool, collections []string, afterID int64, limit int) ([]OplogEntry, error) {
+// GetOplogEntriesMultipleCollections implements OplogRepository
+func (db *PostgresDatabase) GetOplogEntriesMultipleCollections(ctx context.Context, collections []string, afterID int64, limit int) ([]OplogEntry, error) {
+	return GetOplogEntriesMultipleCollections(ctx, db.pool, collections, afterID, limit)
+}
+
+func GetOplogEntriesMultipleCollections(ctx context.Context, pool PostgresPool, collections []string, afterID int64, limit int) ([]OplogEntry, error) {
 	if len(collections) == 0 {
 		return []OplogEntry{}, nil
 	}

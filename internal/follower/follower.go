@@ -12,12 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nrjais/emcache/internal/collectioncache"
 	"github.com/nrjais/emcache/internal/config"
 	"github.com/nrjais/emcache/internal/db"
 	"github.com/nrjais/emcache/internal/shape"
-	"golang.org/x/exp/constraints"
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
 )
@@ -28,10 +26,55 @@ type conn struct {
 	conn  *sqlite.Conn
 	shape shape.Shape
 }
+type colVersion struct {
+	collectionName string
+	version        int
+}
+
+type batchUpdateTracker struct {
+	lastCommittedOffset map[colVersion]int64
+	mutex               sync.Mutex
+}
+
+func newBatchUpdateTracker() *batchUpdateTracker {
+	return &batchUpdateTracker{
+		lastCommittedOffset: make(map[colVersion]int64),
+	}
+}
+
+func (t *batchUpdateTracker) updateOffset(dbKey colVersion, offset int64) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	t.lastCommittedOffset[dbKey] = offset
+}
+
+func (t *batchUpdateTracker) isStale(dbKey colVersion, globalOffset int64, batchSize int) bool {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+
+	lastOffset, exists := t.lastCommittedOffset[dbKey]
+	if !exists {
+		return false
+	}
+
+	threshold := globalOffset - int64(5*batchSize)
+	return lastOffset < threshold
+}
+
+func (t *batchUpdateTracker) getAllTrackedDBs() []colVersion {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+
+	dbKeys := make([]colVersion, 0, len(t.lastCommittedOffset))
+	for dbKey := range t.lastCommittedOffset {
+		dbKeys = append(dbKeys, dbKey)
+	}
+	return dbKeys
+}
 
 type MainFollower struct {
-	collCache         *collectioncache.Manager
-	pgPool            *pgxpool.Pool
+	collCache         collectioncache.CollectionCacheManager
+	pgPool            db.PostgresPool
 	sqliteBaseDir     string
 	pollInterval      time.Duration
 	cleanupInterval   time.Duration
@@ -40,9 +83,10 @@ type MainFollower struct {
 	connections       map[string]conn
 	connMutex         sync.Mutex
 	metaDB            *sqlite.Conn
+	updateTracker     *batchUpdateTracker
 }
 
-func NewMainFollower(pgPool *pgxpool.Pool, cacheMgr *collectioncache.Manager, sqliteBaseDir string, cfg *config.Config) (*MainFollower, error) {
+func NewMainFollower(pgPool db.PostgresPool, cacheMgr collectioncache.CollectionCacheManager, sqliteBaseDir string, cfg *config.Config) (*MainFollower, error) {
 	pollInterval := time.Duration(cfg.FollowerOptions.PollIntervalSecs) * time.Second
 	batchSize := cfg.FollowerOptions.BatchSize
 
@@ -75,6 +119,7 @@ func NewMainFollower(pgPool *pgxpool.Pool, cacheMgr *collectioncache.Manager, sq
 		globalLastOplogID: 0,
 		connections:       make(map[string]conn),
 		metaDB:            metaDB,
+		updateTracker:     newBatchUpdateTracker(),
 	}
 	err = cf.initializeGlobalLastOplogID()
 	if err != nil {
@@ -134,27 +179,15 @@ func (cf *MainFollower) runMainLoop(ctx context.Context, wg *sync.WaitGroup) {
 			slog.Info("Fetching oplog entries", "after_id", batchMaxProcessedID)
 			entries, err := db.GetOplogEntriesGlobal(ctx, cf.pgPool, batchMaxProcessedID, cf.batchSize)
 			if err != nil {
-				slog.Error("Failed to fetch oplog entries",
-					"after_id", batchMaxProcessedID,
-					"error", err)
+				slog.Error("Failed to fetch oplog entries", "after_id", batchMaxProcessedID, "error", err)
 				continue
 			}
 
-			if len(entries) == 0 {
-				continue
-			}
-
-			slog.Info("Fetched new oplog entries",
-				"count", len(entries),
-				"after_id", batchMaxProcessedID)
+			slog.Info("Fetched new oplog entries", "count", len(entries), "after_id", batchMaxProcessedID)
 
 			processedCount := 0
 			batchFailed := false
 
-			type colVersion struct {
-				collectionName string
-				version        int
-			}
 			entriesByCollection := make(map[colVersion][]db.OplogEntry)
 			for _, entry := range entries {
 				colVersion := colVersion{entry.Collection, entry.Version}
@@ -175,15 +208,14 @@ func (cf *MainFollower) runMainLoop(ctx context.Context, wg *sync.WaitGroup) {
 
 				lastId, err := cf.applyBatchEntries(conn, entries)
 				if err != nil {
-					slog.Error("Failed to apply oplog entries",
-						"collection", colVersion.collectionName,
-						"version", colVersion.version,
-						"error", err)
+					slog.Error("Failed to apply oplog entries", "collection", colVersion.collectionName, "version", colVersion.version, "error", err)
 					batchFailed = true
 					break
 				}
 
-				batchMaxProcessedID = Max(batchMaxProcessedID, lastId)
+				cf.updateTracker.updateOffset(colVersion, lastId)
+
+				batchMaxProcessedID = max(batchMaxProcessedID, lastId)
 				processedCount += len(entries)
 			}
 
@@ -193,9 +225,7 @@ func (cf *MainFollower) runMainLoop(ctx context.Context, wg *sync.WaitGroup) {
 				if err != nil {
 					slog.Error("Failed to update meta DB", "error", err)
 				}
-				slog.Info("Applied oplog entries",
-					"count", processedCount,
-					"new_last_id", batchMaxProcessedID)
+				slog.Info("Applied oplog entries", "count", processedCount, "new_last_id", batchMaxProcessedID)
 			} else {
 				slog.Info("Applied oplog entries with no ID update",
 					"count", processedCount,
@@ -203,18 +233,13 @@ func (cf *MainFollower) runMainLoop(ctx context.Context, wg *sync.WaitGroup) {
 					"batch_max_id", batchMaxProcessedID)
 			}
 
+			cf.updateStaleDBOffsets(ctx)
+
 			if len(entries) == cf.batchSize {
 				pollingInterval = 1 * time.Millisecond
 			}
 		}
 	}
-}
-
-func Max[T constraints.Ordered](a, b T) T {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func (cf *MainFollower) runCleanupLoop(ctx context.Context, wg *sync.WaitGroup) {
@@ -243,11 +268,15 @@ func (cf *MainFollower) runCleanupLoop(ctx context.Context, wg *sync.WaitGroup) 
 	}
 }
 
+func (cf *MainFollower) dbKey(collectionName string, version int) string {
+	return fmt.Sprintf("%s_v%d", collectionName, version)
+}
+
 func (cf *MainFollower) getOrCreateConnection(ctx context.Context, collectionName string, version int) (conn, error) {
 	cf.connMutex.Lock()
 	defer cf.connMutex.Unlock()
 
-	dbKey := fmt.Sprintf("%s_v%d", collectionName, version)
+	dbKey := cf.dbKey(collectionName, version)
 	if conn, exists := cf.connections[dbKey]; exists {
 		return conn, nil
 	}
@@ -392,5 +421,37 @@ func (cf *MainFollower) closeAllConnections() {
 			slog.Error("Error closing connection", "key", key, "error", err)
 		}
 		delete(cf.connections, key)
+	}
+}
+
+func (cf *MainFollower) updateStaleDBOffsets(ctx context.Context) {
+	trackedDBs := cf.updateTracker.getAllTrackedDBs()
+
+	for _, dbKey := range trackedDBs {
+		if cf.updateTracker.isStale(dbKey, cf.globalLastOplogID, cf.batchSize) {
+			slog.Info("Updating stale database offset", "dbKey", dbKey, "to_offset", cf.globalLastOplogID)
+
+			collectionName := dbKey.collectionName
+			version := dbKey.version
+
+			conn, err := cf.getOrCreateConnection(ctx, collectionName, version)
+			if err != nil {
+				if errors.Is(err, ErrCollectionNotFound) {
+					slog.Error("Collection not found, skipping update", "dbKey", dbKey)
+					continue
+				}
+				slog.Error("Failed to get/create SQLite connection", "dbKey", dbKey, "error", err)
+				continue
+			}
+
+			err = setLastAppliedOplogIndex(conn.conn, cf.globalLastOplogID)
+			if err != nil {
+				slog.Error("Failed to update stale database offset", "dbKey", dbKey, "error", err)
+				continue
+			}
+
+			cf.updateTracker.updateOffset(dbKey, cf.globalLastOplogID)
+			slog.Info("Updated stale database offset", "dbKey", dbKey, "offset", cf.globalLastOplogID)
+		}
 	}
 }

@@ -1,2 +1,6 @@
 *.sqlite*
 emcache
+.cursorrules
+emcache*
+*.out
+*.html

@@ -63,7 +63,7 @@ func ConnectMongo(ctx context.Context, mongoURL string) (*mongo.Client, error) {
 	return client, nil
 }
 
-func GetResumeToken(ctx context.Context, pool *pgxpool.Pool, collection string) (string, bool, error) {
+func GetResumeToken(ctx context.Context, pool PostgresPool, collection string) (string, bool, error) {
 	var token string
 	err := pool.QueryRow(ctx, "SELECT token FROM resume_tokens WHERE collection = $1", collection).Scan(&token)
 	if err != nil {
@@ -75,7 +75,7 @@ func GetResumeToken(ctx context.Context, pool *pgxpool.Pool, collection string) 
 	return token, true, nil
 }
 
-func UpsertResumeToken(ctx context.Context, pool *pgxpool.Pool, collection string, token string) error {
+func UpsertResumeToken(ctx context.Context, pool PostgresPool, collection string, token string) error {
 	sql := `
         INSERT INTO resume_tokens (collection, token, updated_at)
         VALUES ($1, $2, NOW())
@@ -98,7 +98,7 @@ type OplogEntry struct {
 	Version    int
 }
 
-func InsertOplogEntry(ctx context.Context, pool *pgxpool.Pool, entry OplogEntry) (int64, error) {
+func InsertOplogEntry(ctx context.Context, pool PostgresPool, entry OplogEntry) (int64, error) {
 	sql := `
         INSERT INTO oplog (operation, doc_id, created_at, collection, doc, version)
         VALUES ($1, $2, $3, $4, $5, $6)
@@ -114,7 +114,7 @@ func InsertOplogEntry(ctx context.Context, pool *pgxpool.Pool, entry OplogEntry)
 	return id, nil
 }
 
-func GetOplogEntriesGlobal(ctx context.Context, pool *pgxpool.Pool, afterID int64, limit int) ([]OplogEntry, error) {
+func GetOplogEntriesGlobal(ctx context.Context, pool PostgresPool, afterID int64, limit int) ([]OplogEntry, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	sql := `
@@ -154,7 +154,7 @@ func GetOplogEntriesGlobal(ctx context.Context, pool *pgxpool.Pool, afterID int6
 	return entries, nil
 }
 
-func IncrementCollectionVersion(ctx context.Context, pool *pgxpool.Pool, collectionName string) (int, error) {
+func IncrementCollectionVersion(ctx context.Context, pool PostgresPool, collectionName string) (int, error) {
 	var newVersion int
 	sql := `
         UPDATE replicated_collections
@@ -169,7 +169,7 @@ func IncrementCollectionVersion(ctx context.Context, pool *pgxpool.Pool, collect
 	return newVersion, nil
 }
 
-func ListReplicatedCollections(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
+func ListReplicatedCollections(ctx context.Context, pool PostgresPool) ([]string, error) {
 	sql := `SELECT collection_name FROM replicated_collections ORDER BY collection_name`
 	rows, err := pool.Query(ctx, sql)
 	if err != nil {
@@ -196,7 +196,7 @@ type CollectionVersion struct {
 	Version        int
 }
 
-func GetAllCurrentCollectionVersions(ctx context.Context, pool *pgxpool.Pool) ([]CollectionVersion, error) {
+func GetAllCurrentCollectionVersions(ctx context.Context, pool PostgresPool) ([]CollectionVersion, error) {
 	sql := `SELECT collection_name, current_version FROM replicated_collections`
 	rows, err := pool.Query(ctx, sql)
 	if err != nil {
@@ -224,7 +224,7 @@ type ReplicatedCollection struct {
 	Shape          shape.Shape
 }
 
-func AddReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collectionName string, shapeJSON []byte) error {
+func AddReplicatedCollection(ctx context.Context, pool PostgresPool, collectionName string, shapeJSON []byte) error {
 	sql := `INSERT INTO replicated_collections (collection_name, shape) VALUES ($1, $2)`
 	_, err := pool.Exec(ctx, sql, collectionName, shapeJSON)
 	if err != nil {
@@ -239,7 +239,7 @@ func AddReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collection
 	return nil
 }
 
-func RemoveReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collectionName string) error {
+func RemoveReplicatedCollection(ctx context.Context, pool PostgresPool, collectionName string) error {
 	sql := `DELETE FROM replicated_collections WHERE collection_name = $1`
 	cmdTag, err := pool.Exec(ctx, sql, collectionName)
 	if err != nil {
@@ -253,7 +253,7 @@ func RemoveReplicatedCollection(ctx context.Context, pool *pgxpool.Pool, collect
 	return nil
 }
 
-func GetAllReplicatedCollectionsWithShapes(ctx context.Context, pool *pgxpool.Pool) ([]ReplicatedCollection, error) {
+func GetAllReplicatedCollectionsWithShapes(ctx context.Context, pool PostgresPool) ([]ReplicatedCollection, error) {
 	sql := `
         SELECT collection_name, current_version, shape
         FROM replicated_collections

@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nrjais/emcache/internal/collectioncache"
 	"github.com/nrjais/emcache/internal/config"
 	"github.com/nrjais/emcache/internal/db"
@@ -15,28 +14,40 @@ import (
 )
 
 type Coordinator struct {
-	pgPool             *pgxpool.Pool
+	pgPool             db.PostgresPool
 	mongoClient        *mongo.Client
 	mongoDBName        string
-	leaderElector      *leader.LeaderElector
-	collCache          *collectioncache.Manager
+	leaderElector      leader.LeaderElectorInterface
+	collCache          collectioncache.CollectionCacheManager
 	cfg                *config.Config
 	managedCollections map[string]context.CancelFunc
 	mu                 sync.Mutex
 	wg                 *sync.WaitGroup
+	managerFunc        manager.CollectionManagerFunc
 }
 
-func NewCoordinator(pgPool *pgxpool.Pool, mongoClient *mongo.Client, mongoDBName string,
-	leaderElector *leader.LeaderElector, cacheMgr *collectioncache.Manager, cfg *config.Config, wg *sync.WaitGroup) *Coordinator {
+type CoordinatorOptions struct {
+	PgPool        db.PostgresPool
+	MongoClient   *mongo.Client
+	MongoDBName   string
+	LeaderElector leader.LeaderElectorInterface
+	CollCache     collectioncache.CollectionCacheManager
+	Config        *config.Config
+	WaitGroup     *sync.WaitGroup
+	ManagerFunc   manager.CollectionManagerFunc
+}
+
+func NewCoordinator(opts CoordinatorOptions) *Coordinator {
 	return &Coordinator{
-		pgPool:             pgPool,
-		mongoClient:        mongoClient,
-		mongoDBName:        mongoDBName,
-		leaderElector:      leaderElector,
-		collCache:          cacheMgr,
-		cfg:                cfg,
+		pgPool:             opts.PgPool,
+		mongoClient:        opts.MongoClient,
+		mongoDBName:        opts.MongoDBName,
+		leaderElector:      opts.LeaderElector,
+		collCache:          opts.CollCache,
+		cfg:                opts.Config,
 		managedCollections: make(map[string]context.CancelFunc),
-		wg:                 wg,
+		wg:                 opts.WaitGroup,
+		managerFunc:        opts.ManagerFunc,
 	}
 }
 
@@ -56,7 +67,7 @@ func (c *Coordinator) Start(ctx context.Context) {
 				"component", "Coordinator")
 			c.stopAllManaging()
 			return
-		case <-c.collCache.RefreshCh:
+		case <-c.collCache.RefreshChannel():
 			slog.Info("Received cache refresh signal. Running periodic collection sync",
 				"component", "Coordinator")
 			if err := c.syncCollections(ctx); err != nil {
@@ -124,7 +135,7 @@ func (c *Coordinator) startManaging(parentCtx context.Context, replicatedColl db
 	c.managedCollections[collectionName] = collCancel
 
 	c.wg.Add(1)
-	go manager.ManageCollection(collCtx, c.wg, replicatedColl, c.pgPool, c.mongoClient, c.mongoDBName, c.leaderElector, c.cfg)
+	go c.managerFunc(collCtx, c.wg, replicatedColl, c.pgPool, c.mongoClient, c.mongoDBName, c.leaderElector, c.cfg)
 }
 
 func (c *Coordinator) stopManaging(collectionName string) {

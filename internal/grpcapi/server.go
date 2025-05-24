@@ -31,14 +31,14 @@ func init() {
 
 type server struct {
 	pb.UnimplementedEmcacheServiceServer
-	pgPool    *pgxpool.Pool
+	pgPool    db.PostgresPool
 	sqliteDir string
 	collCache *collectioncache.Manager
 }
 
 func NewEmcacheServer(pgPool *pgxpool.Pool, sqliteBaseDir string, collCache *collectioncache.Manager) pb.EmcacheServiceServer {
 	return &server{
-		pgPool:    pgPool,
+		pgPool:    db.NewPostgresPool(pgPool),
 		sqliteDir: sqliteBaseDir,
 		collCache: collCache,
 	}

@@ -6,16 +6,16 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/lib/pq"
+	"github.com/nrjais/emcache/internal/db"
 )
 
 type LeaderElector struct {
-	pool       *pgxpool.Pool
+	pool       db.PostgresPool
 	instanceID string
 }
 
-func NewElector(pool *pgxpool.Pool, instanceID string) *LeaderElector {
+func NewElector(pool db.PostgresPool, instanceID string) *LeaderElector {
 	return &LeaderElector{
 		pool:       pool,
 		instanceID: instanceID,

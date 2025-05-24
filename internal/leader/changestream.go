@@ -12,7 +12,6 @@ import (
 	"github.com/nrjais/emcache/internal/db"
 	"github.com/nrjais/emcache/internal/shape"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -64,7 +63,7 @@ func transformDocument(sourceDoc bson.M, collShape shape.Shape) (transformedDocJ
 
 func StartChangeStreamListener(
 	ctx context.Context,
-	pool *pgxpool.Pool,
+	pool db.PostgresPool,
 	mongoClient *mongo.Client,
 	dbName string,
 	replicatedColl db.ReplicatedCollection,
@@ -117,7 +116,7 @@ func StartChangeStreamListener(
 
 func processStream(
 	ctx context.Context,
-	pool *pgxpool.Pool,
+	pool db.PostgresPool,
 	mongoClient *mongo.Client,
 	dbName string,
 	replicatedColl db.ReplicatedCollection,
@@ -291,7 +290,7 @@ func processStream(
 	return nil
 }
 
-func saveResumeToken(ctx context.Context, pool *pgxpool.Pool, collection string, token bson.Raw) error {
+func saveResumeToken(ctx context.Context, pool db.PostgresPool, collection string, token bson.Raw) error {
 	if token == nil {
 		slog.Warn("Attempted to save a nil resume token, skipping",
 			"role", "Leader",
@@ -308,7 +307,7 @@ func saveResumeToken(ctx context.Context, pool *pgxpool.Pool, collection string,
 	return nil
 }
 
-func processChangeEvent(ctx context.Context, pool *pgxpool.Pool, event bson.M, collectionName string, version int, collShape shape.Shape) error {
+func processChangeEvent(ctx context.Context, pool db.PostgresPool, event bson.M, collectionName string, version int, collShape shape.Shape) error {
 	opTypeStr, _ := event["operationType"].(string)
 
 	docKey, ok := event["documentKey"].(bson.M)
@@ -399,7 +398,7 @@ func processChangeEvent(ctx context.Context, pool *pgxpool.Pool, event bson.M, c
 	return nil
 }
 
-func performInitialScan(ctx context.Context, pool *pgxpool.Pool, coll *mongo.Collection, collectionName string, version int, collShape shape.Shape, batchSize int) error {
+func performInitialScan(ctx context.Context, pool db.PostgresPool, coll *mongo.Collection, collectionName string, version int, collShape shape.Shape, batchSize int) error {
 	cursor, err := coll.Find(ctx, bson.D{})
 	if err != nil {
 		return fmt.Errorf("failed to start Find cursor for initial scan: %w", err)
@@ -441,7 +440,7 @@ func performInitialScan(ctx context.Context, pool *pgxpool.Pool, coll *mongo.Col
 	return nil
 }
 
-func createAndInsertEntry(ctx context.Context, pool *pgxpool.Pool, doc bson.M, collectionName string, version int, collShape shape.Shape) (string, error) {
+func createAndInsertEntry(ctx context.Context, pool db.PostgresPool, doc bson.M, collectionName string, version int, collShape shape.Shape) (string, error) {
 	docIDRaw, ok := doc["_id"]
 	if !ok {
 		slog.Warn("Skipping document with missing _id during initial scan",

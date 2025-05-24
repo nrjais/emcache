@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net"
@@ -31,6 +32,17 @@ import (
 )
 
 func main() {
+	// Parse command line arguments
+	var configPath string
+	flag.StringVar(&configPath, "config", "", "Path to configuration file (overrides EMCACHE_CONFIG_PATH)")
+	flag.Parse()
+
+	// Set config path if provided via command line
+	if configPath != "" {
+		os.Setenv("EMCACHE_CONFIG_PATH", configPath)
+		slog.Info("Using config file from command line", "path", configPath)
+	}
+
 	slog.Info("Starting emcache server")
 
 	cfg := config.Load()
@@ -66,7 +78,7 @@ func main() {
 	bgTaskCtx, bgTaskCancel := context.WithCancel(ctx)
 
 	collectionCacheManager := collectioncache.NewManager(pgPool, cfg)
-	collectionCacheManager.Start(bgTaskCtx, &wg)
+	collectionCacheManager.Start(bgTaskCtx)
 
 	err = startCentralFollower(bgTaskCtx, &wg, pgPool, collectionCacheManager, cfg)
 	if err != nil {
@@ -132,12 +144,12 @@ func setupLeaderElector(pgPool *pgxpool.Pool) (*leader.LeaderElector, string) {
 		hostname = "unknown-instance"
 	}
 	instanceID := fmt.Sprintf("%s-%d", hostname, os.Getpid())
-	leaderElector := leader.NewElector(pgPool, instanceID)
+	leaderElector := leader.NewElector(db.NewPostgresPool(pgPool), instanceID)
 	return leaderElector, instanceID
 }
 
 func startCentralFollower(ctx context.Context, wg *sync.WaitGroup, pgPool *pgxpool.Pool, cacheMgr *collectioncache.Manager, cfg *config.Config) error {
-	centralFollower, err := follower.NewMainFollower(pgPool, cacheMgr, cfg.SQLiteDir, cfg)
+	centralFollower, err := follower.NewMainFollower(db.NewPostgresPool(pgPool), cacheMgr, cfg.SQLiteDir, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to create central follower: %w", err)
 	}
@@ -148,12 +160,132 @@ func startCentralFollower(ctx context.Context, wg *sync.WaitGroup, pgPool *pgxpo
 
 func startCollectionCoordinator(ctx context.Context, wg *sync.WaitGroup, pgPool *pgxpool.Pool, mongoClient *mongo.Client, mongoDBName string, leaderElector *leader.LeaderElector, cacheMgr *collectioncache.Manager, cfg *config.Config) {
 	slog.Info("Initializing Collection Coordinator")
-	coord := coordinator.NewCoordinator(pgPool, mongoClient, mongoDBName, leaderElector, cacheMgr, cfg, wg)
+
+	// Create wrapper for leader elector to match interface
+	leaderElectorWrapper := &leaderElectorWrapper{elector: leaderElector}
+
+	// Create wrapper for manager function to match expected signature
+	managerWrapper := func(
+		ctx context.Context,
+		wg *sync.WaitGroup,
+		replicatedColl db.ReplicatedCollection,
+		pgPool interface{},
+		mongoClient *mongo.Client,
+		mongoDBName string,
+		leaderElector interface{},
+		cfg *config.Config,
+	) {
+		// The coordinator passes db.PostgresPool and leader.LeaderElectorInterface
+		// We need to convert them to concrete types for the manager function
+		actualPgPool := pgPool.(db.PostgresPool)
+		actualLeaderElector := leaderElector.(leader.LeaderElectorInterface)
+
+		// Since manager.ManageCollection expects concrete types, we need to extract them
+		// This is a design issue - for now, let's call the leader function directly
+		// TODO: This needs to be redesigned to work with interfaces properly
+
+		// For now, let's create a simple management routine similar to manager.ManageCollection
+		// but using interfaces
+		collectionName := replicatedColl.CollectionName
+		defer wg.Done()
+
+		var roleCtx context.Context
+		var roleCancel context.CancelFunc = func() {}
+		var currentRole string
+
+		defer roleCancel()
+
+		slog.Info("Starting management routine", "collection", collectionName)
+
+		leaseDuration := time.Duration(cfg.LeaderOptions.LeaseDurationSecs) * time.Second
+
+		for {
+			select {
+			case <-ctx.Done():
+				slog.Info("Management context cancelled, stopping", "collection", collectionName)
+				actualLeaderElector.ReleaseLock(ctx, collectionName)
+				roleCancel()
+				return
+
+			case <-time.After(leaseDuration / 2):
+				isLeaderNow := false
+				var acquireErr error
+				// Try to acquire leadership
+				acquired, acquireErr := actualLeaderElector.TryAcquireLock(ctx, collectionName, leaseDuration)
+				if acquireErr != nil {
+					slog.Error("Failed to acquire leadership",
+						"collection", collectionName,
+						"error", acquireErr)
+				} else if acquired {
+					isLeaderNow = true
+				}
+
+				desiredRole := ""
+				if isLeaderNow {
+					desiredRole = "leader"
+				} else {
+					desiredRole = "follower"
+				}
+
+				if desiredRole != currentRole {
+					slog.Info("Transitioning role",
+						"collection", collectionName,
+						"from", currentRole,
+						"to", desiredRole)
+
+					roleCancel()
+					currentRole = desiredRole
+
+					if currentRole == "leader" {
+						slog.Info("Starting change stream listener",
+							"collection", collectionName,
+							"direction", "Mongo->Postgres")
+						roleCtx, roleCancel = context.WithCancel(ctx)
+						go leader.StartChangeStreamListener(roleCtx, actualPgPool, mongoClient, mongoDBName, replicatedColl, &cfg.LeaderOptions)
+					} else {
+						slog.Info("Instance is now a follower", "collection", collectionName)
+						roleCancel = func() {}
+						roleCtx = nil
+					}
+				}
+			}
+		}
+	}
+
+	opts := coordinator.CoordinatorOptions{
+		PgPool:        db.NewPostgresPool(pgPool),
+		MongoClient:   mongoClient,
+		MongoDBName:   mongoDBName,
+		LeaderElector: leaderElectorWrapper,
+		CollCache:     cacheMgr,
+		Config:        cfg,
+		WaitGroup:     wg,
+		ManagerFunc:   managerWrapper,
+	}
+
+	coord := coordinator.NewCoordinator(opts)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		coord.Start(ctx)
 	}()
+}
+
+// leaderElectorWrapper adapts LeaderElector to LeaderElectorInterface
+type leaderElectorWrapper struct {
+	elector *leader.LeaderElector
+}
+
+func (w *leaderElectorWrapper) TryAcquireLock(ctx context.Context, collectionName string, leaseDuration time.Duration) (bool, error) {
+	return w.elector.TryAcquire(ctx, collectionName, leaseDuration)
+}
+
+func (w *leaderElectorWrapper) ReleaseLock(ctx context.Context, collectionName string) error {
+	return w.elector.Release(collectionName)
+}
+
+func (w *leaderElectorWrapper) ReleaseAll() {
+	w.elector.ReleaseAll()
 }
 
 func startSnapshotCleanup(ctx context.Context, wg *sync.WaitGroup, cfg *config.Config) {

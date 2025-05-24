@@ -79,7 +79,7 @@ func ManageCollection(
 						"collection", collectionName,
 						"direction", "Mongo->Postgres")
 					roleCtx, roleCancel = context.WithCancel(ctx)
-					go leader.StartChangeStreamListener(roleCtx, pgPool, mongoClient, mongoDBName, replicatedColl, &cfg.LeaderOptions)
+					go leader.StartChangeStreamListener(roleCtx, db.NewPostgresPool(pgPool), mongoClient, mongoDBName, replicatedColl, &cfg.LeaderOptions)
 				} else {
 					slog.Info("Instance is now a follower", "collection", collectionName)
 					roleCancel = func() {}

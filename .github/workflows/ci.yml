@@ -1,0 +1,166 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run go fmt check
+        run: |
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+            echo "The following files are not formatted:"
+            gofmt -s -l .
+            exit 1
+          fi
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run unit tests
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/...
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    needs: lint
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Install MongoDB tools
+        run: |
+          wget -qO - https://www.mongodb.org/static/pgp/server-8.0.asc | sudo apt-key add -
+          echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/8.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
+          sudo apt-get update
+          sudo apt-get install -y mongodb-mongosh
+
+      - name: Start MongoDB with replica set
+        run: |
+          docker run -d --name mongo \
+            -p 27017:27017 \
+            mongo:8 \
+            mongod --replSet rs0 --bind_ip_all --port 27017
+
+          # Wait for MongoDB to start
+          for i in {1..30}; do
+            if mongosh --host localhost:27017 --eval "db.adminCommand('ping')" --quiet; then
+              echo "MongoDB is ready"
+              break
+            fi
+            echo "Waiting for MongoDB... ($i/30)"
+            sleep 2
+          done
+
+      - name: Build emcache server
+        run: go build -o emcache-server cmd/server/main.go
+
+      - name: Initialize MongoDB replica set
+        run: |
+          mongosh --host localhost:27017 --eval "
+            try {
+              rs.status();
+              print('Replica set already initialized');
+            } catch (err) {
+              rs.initiate({
+                _id: 'rs0',
+                members: [{ _id: 0, host: 'localhost:27017' }]
+              });
+              print('Replica set initialized');
+            }
+          "
+
+      - name: Wait for MongoDB replica set
+        run: |
+          for i in {1..30}; do
+            if mongosh --host localhost:27017 --eval "rs.status().ok" --quiet; then
+              echo "MongoDB replica set is ready"
+              break
+            fi
+            echo "Waiting for MongoDB replica set... ($i/30)"
+            sleep 2
+          done
+
+      - name: Start emcache server in background
+        run: |
+          ./emcache-server -config config-ci.yaml &
+          echo $! > emcache-server.pid
+          # Wait for server to start
+          for i in {1..30}; do
+            if curl -f http://localhost:50051 2>/dev/null; then
+              echo "Emcache server is ready"
+              break
+            fi
+            echo "Waiting for emcache server... ($i/30)"
+            sleep 1
+          done
+
+      - name: Run integration tests
+        run: go test -v ./tests/...
+
+      - name: Stop services
+        if: always()
+        run: |
+          if [ -f emcache-server.pid ]; then
+            kill $(cat emcache-server.pid) || true
+            rm emcache-server.pid
+          fi
+          docker stop mongo || true
+          docker rm mongo || true
