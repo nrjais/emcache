@@ -11,19 +11,38 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
+const metadataTableName = "metadata"
+const lastAppliedIdxKey = "last_applied_oplog_idx"
+
 type sqliteCollection struct {
-	db      *sql.DB
+	db      SQLiteDBInterface
 	version int32
 	details *pb.Collection
 }
 
-func openSQLiteDB(dbPath string) (*sql.DB, error) {
+func openSQLiteDB(dbPath string) (SQLiteDBInterface, error) {
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite db (%s): %w", dbPath, err)
 	}
 	db.SetMaxOpenConns(1)
-	return db, nil
+
+	// Wrap the *sql.DB in an adapter
+	adapter := &SQLiteDBAdapter{db: db}
+
+	// Initialize metadata table if it doesn't exist
+	if err := initMetadataTable(adapter); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to initialize metadata table: %w", err)
+	}
+
+	return adapter, nil
+}
+
+func initMetadataTable(db SQLiteDBInterface) error {
+	createTableSQL := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (key TEXT PRIMARY KEY, value TEXT)`, metadataTableName)
+	_, err := db.Exec(createTableSQL)
+	return err
 }
 
 func (sc *sqliteCollection) close() error {
@@ -31,6 +50,30 @@ func (sc *sqliteCollection) close() error {
 		return sc.db.Close()
 	}
 	return nil
+}
+
+func (sc *sqliteCollection) getLastAppliedOplogIndex(ctx context.Context) (int64, error) {
+	if sc.db == nil {
+		return 0, fmt.Errorf("database connection is not available")
+	}
+
+	var idx int64
+	query := fmt.Sprintf("SELECT value FROM %s WHERE key = ?", metadataTableName)
+	row := sc.db.QueryRowContext(ctx, query, lastAppliedIdxKey)
+
+	var value string
+	if err := row.Scan(&value); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, nil // Default to 0 if no record exists
+		}
+		return 0, fmt.Errorf("failed to get last applied oplog index: %w", err)
+	}
+
+	if _, err := fmt.Sscanf(value, "%d", &idx); err != nil {
+		return 0, fmt.Errorf("failed to parse last applied oplog index: %w", err)
+	}
+
+	return idx, nil
 }
 
 func (sc *sqliteCollection) applyOplogEntries(ctx context.Context, entries []*pb.OplogEntry) error {
@@ -45,10 +88,13 @@ func (sc *sqliteCollection) applyOplogEntries(ctx context.Context, entries []*pb
 	defer tx.Rollback()
 
 	const dataTableName = "data"
+	var lastIndex int64
 
 	for _, entry := range entries {
 		const pkColumn = "id"
 		pkValue := entry.Id
+		lastIndex = entry.Index
+
 		if sc.version != entry.Version {
 			// Skip entries with a version that is different from the current collection's version
 			// TODO: Add realtime swap of the database file here to latest version
@@ -95,6 +141,15 @@ func (sc *sqliteCollection) applyOplogEntries(ctx context.Context, entries []*pb
 			}
 		default:
 			// Ignore unknown operation types
+		}
+	}
+
+	// Update the last applied oplog index
+	if len(entries) > 0 {
+		updateSQL := fmt.Sprintf(`INSERT OR REPLACE INTO %s (key, value) VALUES (?, ?)`, metadataTableName)
+		_, err = tx.ExecContext(ctx, updateSQL, lastAppliedIdxKey, fmt.Sprintf("%d", lastIndex))
+		if err != nil {
+			return fmt.Errorf("failed to update last applied oplog index to %d: %w", lastIndex, err)
 		}
 	}
 

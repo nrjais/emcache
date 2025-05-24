@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -31,15 +32,21 @@ type ClientConfig struct {
 }
 
 type collectionState struct {
-	config CollectionConfig
-	sqlite *sqliteCollection
+	config     CollectionConfig
+	collection CollectionInterface
+}
+
+// ClientDependencies holds all the dependencies for the client
+type ClientDependencies struct {
+	GrpcClient    pb.EmcacheServiceClient
+	Decompression DecompressionInterface
+	Conn          *grpc.ClientConn // Keep for closing
 }
 
 type Client struct {
 	cancelFunc   context.CancelFunc
-	conn         *grpc.ClientConn
+	deps         ClientDependencies
 	config       ClientConfig
-	grpcClient   pb.EmcacheServiceClient
 	colNames     []string
 	lastOplogIdx int64
 	collections  map[string]*collectionState
@@ -56,9 +63,19 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 	grpcClient := pb.NewEmcacheServiceClient(conn)
 
+	deps := ClientDependencies{
+		GrpcClient:    grpcClient,
+		Decompression: NewDecompressionAdapter(),
+		Conn:          conn,
+	}
+
+	return NewClientWithDependencies(ctx, config, deps)
+}
+
+// NewClientWithDependencies creates a client with injected dependencies for testing
+func NewClientWithDependencies(ctx context.Context, config ClientConfig, deps ClientDependencies) (*Client, error) {
 	c := &Client{
-		conn:        conn,
-		grpcClient:  grpcClient,
+		deps:        deps,
 		config:      config,
 		collections: make(map[string]*collectionState),
 	}
@@ -101,6 +118,41 @@ func (c *Client) init(ctx context.Context, config ClientConfig) error {
 		c.collections[result.A.config.Name] = result.A
 	}
 
+	// Determine the lowest offset from all databases
+	err = c.initializeLastOplogIdx(ctx)
+	if err != nil {
+		_ = c.Close()
+		return fmt.Errorf("failed to initialize last oplog index: %w", err)
+	}
+
+	return nil
+}
+
+// initializeLastOplogIdx determines the lowest offset from all databases to start sync correctly
+func (c *Client) initializeLastOplogIdx(ctx context.Context) error {
+	minIndex := int64(-1)
+
+	for collectionName, state := range c.collections {
+		idx, err := state.collection.GetLastAppliedOplogIndex(ctx)
+		if err != nil {
+			slog.Error("Failed to get last applied oplog index", "collection", collectionName, "error", err)
+			return fmt.Errorf("failed to get last applied oplog index for collection '%s': %w", collectionName, err)
+		}
+
+		slog.Info("Collection last oplog index", "collection", collectionName, "index", idx)
+
+		if minIndex == -1 || idx < minIndex {
+			minIndex = idx
+		}
+	}
+
+	if minIndex == -1 {
+		minIndex = 0 // Default if no collections
+	}
+
+	c.lastOplogIdx = minIndex
+	slog.Info("Initialized client last oplog index", "index", c.lastOplogIdx)
+
 	return nil
 }
 
@@ -127,13 +179,11 @@ func (c *Client) addCollectionInternal(ctx context.Context, collConfig Collectio
 		return nil, fmt.Errorf("failed to get collection details for collection '%s': %w", collConfig.Name, err)
 	}
 
+	collection := NewCollectionAdapter(db, dbVersion, details)
+
 	return &collectionState{
-		config: collConfig,
-		sqlite: &sqliteCollection{
-			db:      db,
-			version: dbVersion,
-			details: details,
-		},
+		config:     collConfig,
+		collection: collection,
 	}, nil
 }
 
@@ -168,8 +218,8 @@ func (c *Client) Close() error {
 func (c *Client) close() error {
 	var firstErr error
 	for _, state := range c.collections {
-		if state.sqlite != nil {
-			if err := state.sqlite.close(); err != nil {
+		if state.collection != nil {
+			if err := state.collection.Close(); err != nil {
 				if firstErr == nil {
 					firstErr = err
 				}
@@ -177,8 +227,8 @@ func (c *Client) close() error {
 		}
 	}
 
-	if c.conn != nil {
-		if err := c.conn.Close(); err != nil {
+	if c.deps.Conn != nil {
+		if err := c.deps.Conn.Close(); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -188,18 +238,15 @@ func (c *Client) close() error {
 	return firstErr
 }
 
-func (c *Client) downloadDbForCollection(ctx context.Context, collectionName string, writer io.Writer) (int32, error) {
+func (c *Client) downloadDbForCollection(ctx context.Context, collectionName string, writer io.WriteCloser) (int32, error) {
 	reqComp := pb.Compression_ZSTD
-	stream, err := c.grpcClient.DownloadDb(ctx, &pb.DownloadDbRequest{CollectionName: collectionName, Compression: reqComp})
+	stream, err := c.deps.GrpcClient.DownloadDb(ctx, &pb.DownloadDbRequest{CollectionName: collectionName, Compression: reqComp})
 	if err != nil {
 		return 0, fmt.Errorf("failed to start download stream: %w", err)
 	}
 
 	resp, err := stream.Recv()
 	if err != nil {
-		if err == io.EOF {
-			return 0, fmt.Errorf("received empty stream")
-		}
 		return 0, fmt.Errorf("error receiving first download chunk: %w", err)
 	}
 	_ = stream.CloseSend()
@@ -211,7 +258,7 @@ func (c *Client) downloadDbForCollection(ctx context.Context, collectionName str
 		return 0, fmt.Errorf("server sent compression %s, but %s was requested", resComp, reqComp)
 	}
 
-	err = decompressStream(stream, firstChunkData, resComp, writer)
+	err = c.deps.Decompression.DecompressStream(stream, firstChunkData, resComp, writer)
 	if err != nil {
 		return 0, fmt.Errorf("decompression failed: %w", err)
 	}
@@ -225,7 +272,7 @@ func (c *Client) getOplogEntries(ctx context.Context, collectionNames []string, 
 		AfterIndex:      afterIndex,
 		Limit:           c.config.BatchSize,
 	}
-	resp, err := c.grpcClient.GetOplogEntries(ctx, req)
+	resp, err := c.deps.GrpcClient.GetOplogEntries(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +287,7 @@ func (c *Client) AddCollection(ctx context.Context, collectionName string, shape
 		CollectionName: collectionName,
 		Shape:          shape,
 	}
-	resp, err := c.grpcClient.AddCollection(ctx, req)
+	resp, err := c.deps.GrpcClient.AddCollection(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +296,7 @@ func (c *Client) AddCollection(ctx context.Context, collectionName string, shape
 
 func (c *Client) RemoveCollection(ctx context.Context, collectionName string) (*pb.RemoveCollectionResponse, error) {
 	req := &pb.RemoveCollectionRequest{CollectionName: collectionName}
-	resp, err := c.grpcClient.RemoveCollection(ctx, req)
+	resp, err := c.deps.GrpcClient.RemoveCollection(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +328,7 @@ func (c *Client) runCollectionUpdates(ctx context.Context) {
 		case <-ticker.C:
 			err := c.SyncToLatest(ctx, 10)
 			if err != nil {
-				// TODO: log error
+				slog.Error("Error syncing to latest", "error", err)
 			}
 		}
 	}
@@ -304,11 +351,11 @@ func (c *Client) applyOplogEntries(ctx context.Context, entries []*pb.OplogEntry
 		if !ok {
 			continue
 		}
-		if state.sqlite == nil {
+		if state.collection == nil {
 			continue
 		}
 
-		err := state.sqlite.applyOplogEntries(ctx, collectionEntries)
+		err := state.collection.ApplyOplogEntries(ctx, collectionEntries)
 		if err != nil {
 			return c.lastOplogIdx, fmt.Errorf("failed to apply oplog entries to collection '%s': %w", collectionName, err)
 		}
@@ -336,11 +383,11 @@ func (c *Client) Query(ctx context.Context, collectionName string, query string,
 		return nil, fmt.Errorf("collection '%s' not found or not configured", collectionName)
 	}
 
-	if state.sqlite == nil {
+	if state.collection == nil {
 		return nil, fmt.Errorf("database connection for collection '%s' is not available", collectionName)
 	}
 
-	rows, err := state.sqlite.query(ctx, query, args...)
+	rows, err := state.collection.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query on collection '%s': %w", collectionName, err)
 	}
@@ -382,7 +429,7 @@ func (c *Client) GetCollections(ctx context.Context, collections []string) (*pb.
 		CollectionNames: collections,
 	}
 
-	resp, err := c.grpcClient.GetCollections(ctx, req)
+	resp, err := c.deps.GrpcClient.GetCollections(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("gRPC GetCollections failed: %w", err)
 	}
