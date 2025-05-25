@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -13,6 +14,7 @@ import (
 
 const metadataTableName = "metadata"
 const lastAppliedIdxKey = "last_applied_oplog_idx"
+const dbVersionKey = "db_version"
 
 type sqliteCollection struct {
 	db      SQLiteDBInterface
@@ -74,6 +76,28 @@ func (sc *sqliteCollection) getLastAppliedOplogIndex(ctx context.Context) (int64
 	}
 
 	return idx, nil
+}
+
+// getDbVersion retrieves the stored database version from metadata table
+func getDbVersion(ctx context.Context, db SQLiteDBInterface) (int32, error) {
+	if db == nil {
+		return 0, fmt.Errorf("database connection is not available")
+	}
+
+	query := fmt.Sprintf("SELECT value FROM %s WHERE key = ?", metadataTableName)
+	row := db.QueryRowContext(ctx, query, dbVersionKey)
+
+	var value string
+	if err := row.Scan(&value); err != nil {
+		return 0, fmt.Errorf("failed to get database version: %w", err)
+	}
+
+	version, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse database version: %w", err)
+	}
+
+	return int32(version), nil
 }
 
 func (sc *sqliteCollection) applyOplogEntries(ctx context.Context, entries []*pb.OplogEntry) error {

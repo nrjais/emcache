@@ -96,6 +96,10 @@ func (c *Client) init(ctx context.Context, config ClientConfig) error {
 		return fmt.Errorf("directory is required")
 	}
 
+	if err := os.MkdirAll(config.Directory, 0755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", config.Directory, err)
+	}
+
 	c.colNames = make([]string, 0, len(config.Collections))
 	for _, collConfig := range config.Collections {
 		c.colNames = append(c.colNames, collConfig.Name)
@@ -135,11 +139,8 @@ func (c *Client) initializeLastOplogIdx(ctx context.Context) error {
 	for collectionName, state := range c.collections {
 		idx, err := state.collection.GetLastAppliedOplogIndex(ctx)
 		if err != nil {
-			slog.Error("Failed to get last applied oplog index", "collection", collectionName, "error", err)
 			return fmt.Errorf("failed to get last applied oplog index for collection '%s': %w", collectionName, err)
 		}
-
-		slog.Info("Collection last oplog index", "collection", collectionName, "index", idx)
 
 		if minIndex == -1 || idx < minIndex {
 			minIndex = idx
@@ -151,40 +152,62 @@ func (c *Client) initializeLastOplogIdx(ctx context.Context) error {
 	}
 
 	c.lastOplogIdx = minIndex
-	slog.Info("Initialized client last oplog index", "index", c.lastOplogIdx)
 
 	return nil
 }
 
 func (c *Client) addCollectionInternal(ctx context.Context, collConfig CollectionConfig, collectionsData *pb.GetCollectionsResponse) (*collectionState, error) {
 	dbPath := filepath.Join(c.config.Directory, collConfig.Name+".sqlite")
-	dir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create directory %s for collection '%s': %w", dir, collConfig.Name, err)
+
+	serverCollections := collectionsData.Collections
+	expectedDetails := c.collectionDetails(serverCollections, collConfig)
+	if expectedDetails == nil {
+		return nil, fmt.Errorf("collection '%s' not found on server", collConfig.Name)
 	}
 
-	dbVersion, err := c.downloadDb(ctx, dbPath, collConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download db for collection '%s': %w", collConfig.Name, err)
+	dbVersion := expectedDetails.Version
+	var db SQLiteDBInterface
+	var err error
+
+	db, err = openSQLiteDB(dbPath)
+	if err == nil {
+		storedVersion, err := getDbVersion(ctx, db)
+		if err != nil {
+			_ = db.Close()
+			db = nil
+		} else if storedVersion != dbVersion {
+			_ = db.Close()
+			db = nil
+		}
 	}
 
-	db, err := openSQLiteDB(dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed opening db for collection '%s': %w", collConfig.Name, err)
+	if db == nil {
+		dbVersion, err = c.downloadDb(ctx, dbPath, collConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to download db for collection '%s': %w", collConfig.Name, err)
+		}
+
+		db, err = openSQLiteDB(dbPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed opening db for collection '%s': %w", collConfig.Name, err)
+		}
 	}
 
-	details, err := c.getCollectionDetails(collConfig.Name, dbVersion, collectionsData.Collections)
-	if err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("failed to get collection details for collection '%s': %w", collConfig.Name, err)
-	}
-
-	collection := NewCollectionAdapter(db, dbVersion, details)
+	collection := NewCollectionAdapter(db, dbVersion, expectedDetails)
 
 	return &collectionState{
 		config:     collConfig,
 		collection: collection,
 	}, nil
+}
+
+func (*Client) collectionDetails(serverCollections []*pb.Collection, collConfig CollectionConfig) *pb.Collection {
+	for _, coll := range serverCollections {
+		if coll.Name == collConfig.Name {
+			return coll
+		}
+	}
+	return nil
 }
 
 func (c *Client) downloadDb(ctx context.Context, dbPath string, collConfig CollectionConfig) (int32, error) {
@@ -199,15 +222,6 @@ func (c *Client) downloadDb(ctx context.Context, dbPath string, collConfig Colle
 		return 0, fmt.Errorf("failed to download db for collection '%s': %w", collConfig.Name, err)
 	}
 	return dbVersion, nil
-}
-
-func (c *Client) getCollectionDetails(collectionName string, version int32, data []*pb.Collection) (*pb.Collection, error) {
-	for _, collection := range data {
-		if collection.Name == collectionName && collection.Version == version {
-			return collection, nil
-		}
-	}
-	return nil, fmt.Errorf("collection '%s' not found", collectionName)
 }
 
 func (c *Client) Close() error {
