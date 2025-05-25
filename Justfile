@@ -7,19 +7,10 @@ start-ci:
 watch:
 	watchexec -r -w ./pkg -w ./internal -w ./cmd -w ./migrations -w ./config.yaml "just start"
 
-# Install required development tools
 install-tools:
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 	go install go.uber.org/mock/mockgen@latest
-
-# Install system dependencies (for CI)
-install-deps:
-	sudo apt-get update
-	sudo apt-get install -y protobuf-compiler
-
-# Install all dependencies and tools (for CI)
-setup-ci: install-deps install-tools
 
 generate: install-tools
 	protoc --go_out=. --go_opt=paths=source_relative \

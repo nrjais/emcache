@@ -85,13 +85,6 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Install MongoDB tools
-        run: |
-          wget -qO - https://www.mongodb.org/static/pgp/server-8.0.asc | sudo apt-key add -
-          echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/8.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
-          sudo apt-get update
-          sudo apt-get install -y mongodb-mongosh
-
       - name: Start MongoDB with replica set
         run: |
           docker run -d --name mongo \
@@ -101,7 +94,7 @@ jobs:
 
           # Wait for MongoDB to start
           for i in {1..30}; do
-            if mongosh --host localhost:27017 --eval "db.adminCommand('ping')" --quiet; then
+            if docker exec mongo mongosh --eval "db.adminCommand('ping')" --quiet; then
               echo "MongoDB is ready"
               break
             fi
@@ -109,12 +102,19 @@ jobs:
             sleep 2
           done
 
+      - name: Install grpc_health_probe
+        run: |
+          GRPC_HEALTH_PROBE_VERSION=v0.4.38
+          wget -qO /tmp/grpc_health_probe https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${GRPC_HEALTH_PROBE_VERSION}/grpc_health_probe-linux-amd64
+          chmod +x /tmp/grpc_health_probe
+          sudo mv /tmp/grpc_health_probe /usr/local/bin/grpc_health_probe
+
       - name: Build emcache server
         run: go build -o emcache-server cmd/server/main.go
 
       - name: Initialize MongoDB replica set
         run: |
-          mongosh --host localhost:27017 --eval "
+          docker exec mongo mongosh --eval "
             try {
               rs.status();
               print('Replica set already initialized');
@@ -130,7 +130,7 @@ jobs:
       - name: Wait for MongoDB replica set
         run: |
           for i in {1..30}; do
-            if mongosh --host localhost:27017 --eval "rs.status().ok" --quiet; then
+            if docker exec mongo mongosh --eval "rs.status().ok" --quiet; then
               echo "MongoDB replica set is ready"
               break
             fi
@@ -144,7 +144,7 @@ jobs:
           echo $! > emcache-server.pid
           # Wait for server to start
           for i in {1..30}; do
-            if curl -f http://localhost:50051 2>/dev/null; then
+            if grpc_health_probe -addr=localhost:50051 2>/dev/null; then
               echo "Emcache server is ready"
               break
             fi

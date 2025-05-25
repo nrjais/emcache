@@ -17,6 +17,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/x/mongo/driver/connstring"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
 	"github.com/nrjais/emcache/internal/collectioncache"
@@ -307,6 +309,11 @@ func startGRPCServer(wg *sync.WaitGroup, pgPool *pgxpool.Pool, cfg *config.Confi
 	grpcServerImpl := grpcapi.NewEmcacheServer(pgPool, cfg.SQLiteDir, collectionCacheManager)
 	s := grpc.NewServer()
 	pb.RegisterEmcacheServiceServer(s, grpcServerImpl)
+
+	healthServer := health.NewServer()
+	healthpb.RegisterHealthServer(s, healthServer)
+	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+
 	reflection.Register(s)
 
 	slog.Info("gRPC server listening", "port", cfg.GRPCPort)
