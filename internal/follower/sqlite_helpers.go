@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/nrjais/emcache/internal/db"
@@ -29,14 +28,7 @@ func GetCollectionDBPath(collectionName string, sqliteBaseDir string, version in
 	return filepath.Join(collDir, dirName, "db.sqlite")
 }
 
-func openCollectionDB(collectionName, sqliteBaseDir, dbPath string, version int, collShape shape.Shape) (*sqlite.Conn, error) {
-	if sqliteBaseDir == "" {
-		return nil, fmt.Errorf("sqlite base directory cannot be empty")
-	}
-	if version <= 0 {
-		return nil, fmt.Errorf("database version must be positive")
-	}
-
+func openCollectionDB(collectionName, dbPath string, collShape shape.Shape) (*sqlite.Conn, error) {
 	collDir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(collDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create directory for collection %s at %s: %w", collectionName, collDir, err)
@@ -57,68 +49,14 @@ func openCollectionDB(collectionName, sqliteBaseDir, dbPath string, version int,
 		return nil, fmt.Errorf("failed to ensure data table/indexes in %s: %w", dbPath, err)
 	}
 
-	slog.Info("SQLite connection opened",
-		"collection", collectionName,
-		"path", dbPath,
-		"version", version)
 	return conn, nil
-}
-
-func GetOrResetLocalDBVersion(conn *sqlite.Conn, version int) (bool, error) {
-	var storedVersion int
-	var found bool
-	query := fmt.Sprintf("SELECT value FROM %s WHERE key = ?", metadataTableName)
-
-	err := sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
-		Args: []any{dbVersionKey},
-		ResultFunc: func(stmt *sqlite.Stmt) error {
-			value := stmt.ColumnText(0)
-			if value == "" {
-				return nil
-			}
-			var scanErr error
-			storedVersion, scanErr = strconv.Atoi(value)
-			if scanErr != nil {
-				slog.Error("Failed to parse stored local DB version",
-					"value", value,
-					"error", scanErr)
-				return nil
-			}
-			found = true
-			return nil
-		},
-	})
-
-	if err != nil {
-		slog.Error("Failed to query local DB version", "error", err)
-		return false, fmt.Errorf("error querying local DB version: %w", err)
-	}
-
-	if !found {
-		return false, setLocalDBVersion(conn, version)
-	}
-
-	if version != storedVersion {
-		slog.Warn("Version mismatch in existing file",
-			"found_version", storedVersion,
-			"expected_version", version)
-		if err := sqlitex.Execute(conn, fmt.Sprintf("DELETE FROM %s WHERE key = ?", metadataTableName), &sqlitex.ExecOptions{Args: []any{lastAppliedIdxKey}}); err != nil {
-			slog.Error("Failed to clear last applied index during version reset", "error", err)
-		}
-		return true, setLocalDBVersion(conn, version)
-	}
-
-	return false, nil
 }
 
 func setLocalDBVersion(conn *sqlite.Conn, version int) error {
 	sql := fmt.Sprintf(`
         INSERT INTO %s (key, value) VALUES (?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value`, metadataTableName)
-	args := []any{
-		dbVersionKey,
-		fmt.Sprintf("%d", version),
-	}
+	args := []any{dbVersionKey, fmt.Sprintf("%d", version)}
 	err := sqlitex.Execute(conn, sql, &sqlitex.ExecOptions{Args: args})
 	if err != nil {
 		return fmt.Errorf("failed to set local DB version to %d: %w", version, err)
@@ -152,10 +90,7 @@ func setLastAppliedOplogIndex(conn *sqlite.Conn, index int64) error {
 	sql := fmt.Sprintf(`
         INSERT INTO %s (key, value) VALUES (?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value`, metadataTableName)
-	args := []any{
-		lastAppliedIdxKey,
-		fmt.Sprintf("%d", index),
-	}
+	args := []any{lastAppliedIdxKey, fmt.Sprintf("%d", index)}
 	err := sqlitex.Execute(conn, sql, &sqlitex.ExecOptions{Args: args})
 	if err != nil {
 		return fmt.Errorf("failed to set last applied oplog index to %d: %w", index, err)

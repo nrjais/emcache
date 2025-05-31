@@ -173,6 +173,7 @@ func setupCollectionWithShapeAndDocs[T any](t *testing.T, ctx context.Context, c
 		docs := lo.Map(initialDocs, func(doc T, _ int) any { return doc })
 		_, err := collection.InsertMany(ctx, docs)
 		require.NoError(t, err, "Failed to insert initial documents into MongoDB")
+		time.Sleep(5 * time.Second)
 	}
 
 	var emcacheClient *emclient.Client

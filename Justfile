@@ -5,7 +5,7 @@ start-ci:
 	go run cmd/server/main.go -config config-ci.yaml
 
 watch:
-	watchexec -r -w ./pkg -w ./internal -w ./cmd -w ./migrations -w ./config.yaml "just start"
+	watchexec -r -w ./pkg -w ./internal -w ./cmd -w ./config.yaml "just start"
 
 install-tools:
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest

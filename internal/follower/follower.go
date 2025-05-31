@@ -84,6 +84,7 @@ type MainFollower struct {
 	connMutex         sync.Mutex
 	metaDB            *sqlite.Conn
 	updateTracker     *batchUpdateTracker
+	dbCtx             context.Context
 }
 
 func NewMainFollower(pgPool db.PostgresPool, cacheMgr collectioncache.CollectionCacheManager, sqliteBaseDir string, cfg *config.Config) (*MainFollower, error) {
@@ -148,6 +149,9 @@ func (cf *MainFollower) initializeGlobalLastOplogID() error {
 func (cf *MainFollower) Start(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 	slog.Info("MainFollower starting")
+	cf.metaDB.SetInterrupt(ctx.Done())
+	dbCtx, cancel := context.WithCancel(ctx)
+	cf.dbCtx = dbCtx
 
 	var loopWg sync.WaitGroup
 	loopWg.Add(2)
@@ -158,6 +162,7 @@ func (cf *MainFollower) Start(ctx context.Context, wg *sync.WaitGroup) {
 	loopWg.Wait()
 	slog.Info("MainFollower stopped")
 	cf.closeAllConnections()
+	cancel()
 }
 
 func (cf *MainFollower) runMainLoop(ctx context.Context, wg *sync.WaitGroup) {
@@ -272,6 +277,11 @@ func (cf *MainFollower) dbKey(collectionName string, version int) string {
 	return fmt.Sprintf("%s_v%d", collectionName, version)
 }
 
+func (cf *MainFollower) EnsureOpenConnection(ctx context.Context, collectionName string, version int) error {
+	_, err := cf.getOrCreateConnection(ctx, collectionName, version)
+	return err
+}
+
 func (cf *MainFollower) getOrCreateConnection(ctx context.Context, collectionName string, version int) (conn, error) {
 	cf.connMutex.Lock()
 	defer cf.connMutex.Unlock()
@@ -281,6 +291,15 @@ func (cf *MainFollower) getOrCreateConnection(ctx context.Context, collectionNam
 		return conn, nil
 	}
 
+	c, err := cf.createNewDbConnection(ctx, collectionName, version)
+	if err != nil {
+		return conn{}, err
+	}
+	cf.connections[dbKey] = c
+	return c, nil
+}
+
+func (cf *MainFollower) createNewDbConnection(ctx context.Context, collectionName string, version int) (conn, error) {
 	dbPath := GetCollectionDBPath(collectionName, cf.sqliteBaseDir, version)
 	replicatedColl, found, err := cf.collCache.GetCollectionRefresh(ctx, collectionName)
 	if err != nil {
@@ -293,26 +312,29 @@ func (cf *MainFollower) getOrCreateConnection(ctx context.Context, collectionNam
 	}
 
 	slog.Info("Opening connection for", "collection", collectionName, "at", dbPath)
-	sqliteConn, err := openCollectionDB(collectionName, cf.sqliteBaseDir, dbPath, version, replicatedColl.Shape)
+	sqliteConn, err := openCollectionDB(collectionName, dbPath, replicatedColl.Shape)
 	if err != nil {
 		return conn{}, err
 	}
 
-	sqliteConn.SetInterrupt(ctx.Done())
+	slog.Info("SQLite connection opened", "collection", collectionName, "path", dbPath, "version", version)
+	sqliteConn.SetInterrupt(cf.dbCtx.Done())
 
-	reset, err := GetOrResetLocalDBVersion(sqliteConn, version)
+	err = setLocalDBVersion(sqliteConn, version)
 	if err != nil {
 		sqliteConn.Close()
 		slog.Error("Error getting/resetting internal version", "path", dbPath, "error", err)
 		return conn{}, fmt.Errorf("failed to get/reset internal version for %s: %w", dbPath, err)
 	}
-	if reset {
-		slog.Info("Version mismatch in existing file, resetting to", "version", version, "for", dbPath)
+	err = setLastAppliedOplogIndex(sqliteConn, cf.globalLastOplogID)
+	if err != nil {
+		sqliteConn.Close()
+		slog.Error("Error setting last applied oplog index", "path", dbPath, "error", err)
+		return conn{}, fmt.Errorf("failed to set last applied oplog index for %s: %w", dbPath, err)
 	}
 
-	conn := conn{conn: sqliteConn, shape: replicatedColl.Shape}
-	cf.connections[dbKey] = conn
-	return conn, nil
+	c := conn{conn: sqliteConn, shape: replicatedColl.Shape}
+	return c, nil
 }
 
 func (cf *MainFollower) applyBatchEntries(conn conn, entries []db.OplogEntry) (lastId int64, err error) {

@@ -29,18 +29,65 @@ func init() {
 	validate = validator.New(validator.WithRequiredStructEnabled())
 }
 
+// DatabaseOperations interface for database operations to enable testing
+type DatabaseOperations interface {
+	GetOplogEntriesMultipleCollections(ctx context.Context, pool db.PostgresPool, collections []string, afterID int64, limit int) ([]db.OplogEntry, error)
+	GetAllReplicatedCollectionsWithShapes(ctx context.Context, pool db.PostgresPool) ([]db.ReplicatedCollection, error)
+	AddReplicatedCollection(ctx context.Context, pool db.PostgresPool, collectionName string, shapeJSON []byte) error
+	RemoveReplicatedCollection(ctx context.Context, pool db.PostgresPool, collectionName string) error
+}
+
+// DefaultDatabaseOperations implements DatabaseOperations using the actual db package functions
+type DefaultDatabaseOperations struct{}
+
+func (d *DefaultDatabaseOperations) GetOplogEntriesMultipleCollections(ctx context.Context, pool db.PostgresPool, collections []string, afterID int64, limit int) ([]db.OplogEntry, error) {
+	return db.GetOplogEntriesMultipleCollections(ctx, pool, collections, afterID, limit)
+}
+
+func (d *DefaultDatabaseOperations) GetAllReplicatedCollectionsWithShapes(ctx context.Context, pool db.PostgresPool) ([]db.ReplicatedCollection, error) {
+	return db.GetAllReplicatedCollectionsWithShapes(ctx, pool)
+}
+
+func (d *DefaultDatabaseOperations) AddReplicatedCollection(ctx context.Context, pool db.PostgresPool, collectionName string, shapeJSON []byte) error {
+	return db.AddReplicatedCollection(ctx, pool, collectionName, shapeJSON)
+}
+
+func (d *DefaultDatabaseOperations) RemoveReplicatedCollection(ctx context.Context, pool db.PostgresPool, collectionName string) error {
+	return db.RemoveReplicatedCollection(ctx, pool, collectionName)
+}
+
 type server struct {
 	pb.UnimplementedEmcacheServiceServer
 	pgPool    db.PostgresPool
 	sqliteDir string
-	collCache *collectioncache.Manager
+	collCache collectioncache.CollectionCacheManager
+	follower  follower.FollowerInterface
+	dbOps     DatabaseOperations
 }
 
-func NewEmcacheServer(pgPool *pgxpool.Pool, sqliteBaseDir string, collCache *collectioncache.Manager) pb.EmcacheServiceServer {
+func NewEmcacheServer(pgPool *pgxpool.Pool, sqliteBaseDir string, collCache collectioncache.CollectionCacheManager, follower follower.FollowerInterface) pb.EmcacheServiceServer {
+	var poolInterface db.PostgresPool
+	if pgPool != nil {
+		poolInterface = db.NewPostgresPool(pgPool)
+	}
+
 	return &server{
-		pgPool:    db.NewPostgresPool(pgPool),
+		pgPool:    poolInterface,
 		sqliteDir: sqliteBaseDir,
 		collCache: collCache,
+		follower:  follower,
+		dbOps:     &DefaultDatabaseOperations{},
+	}
+}
+
+// NewEmcacheServerWithDeps creates a server with custom dependencies for testing
+func NewEmcacheServerWithDeps(pgPool db.PostgresPool, sqliteBaseDir string, collCache collectioncache.CollectionCacheManager, follower follower.FollowerInterface, dbOps DatabaseOperations) pb.EmcacheServiceServer {
+	return &server{
+		pgPool:    pgPool,
+		sqliteDir: sqliteBaseDir,
+		collCache: collCache,
+		follower:  follower,
+		dbOps:     dbOps,
 	}
 }
 
@@ -75,6 +122,12 @@ func (s *server) DownloadDb(req *pb.DownloadDbRequest, stream pb.EmcacheService_
 	}
 	currentVersion := replicatedColl.CurrentVersion
 	dbPath := follower.GetCollectionDBPath(collectionName, s.sqliteDir, currentVersion)
+
+	err = s.follower.EnsureOpenConnection(ctx, collectionName, currentVersion)
+	if err != nil {
+		slog.Error("Failed to ensure open connection", "collection", collectionName, "error", err)
+		return status.Error(codes.Internal, "Failed to ensure open connection")
+	}
 
 	snapshotFileName := fmt.Sprintf("%s_v%d.snapshot", collectionName, currentVersion)
 	snapshotPath, cleanupSnapshot, err := snapshot.GetOrGenerateSnapshot(ctx, dbPath, s.sqliteDir, snapshotFileName)
@@ -145,7 +198,7 @@ func (s *server) GetOplogEntries(ctx context.Context, req *pb.GetOplogEntriesReq
 		"after_index", afterIndex,
 		"limit", limit)
 
-	entries, err := db.GetOplogEntriesMultipleCollections(ctx, s.pgPool, collectionNames, afterIndex, int(limit))
+	entries, err := s.dbOps.GetOplogEntriesMultipleCollections(ctx, s.pgPool, collectionNames, afterIndex, int(limit))
 	if err != nil {
 		slog.Error("Failed to fetch oplog entries",
 			"collections", collectionNames,
@@ -177,7 +230,7 @@ func (s *server) GetOplogEntries(ctx context.Context, req *pb.GetOplogEntriesReq
 func (s *server) GetCollections(ctx context.Context, req *pb.GetCollectionsRequest) (*pb.GetCollectionsResponse, error) {
 	slog.Info("Fetching all collections")
 
-	internalCollections, err := db.GetAllReplicatedCollectionsWithShapes(ctx, s.pgPool)
+	internalCollections, err := s.dbOps.GetAllReplicatedCollectionsWithShapes(ctx, s.pgPool)
 	if err != nil {
 		slog.Error("Failed to fetch collections", "error", err)
 		return nil, status.Error(codes.Internal, "Failed to fetch collection list")
@@ -241,7 +294,7 @@ func (s *server) AddCollection(ctx context.Context, req *pb.AddCollectionRequest
 		return nil, status.Error(codes.Internal, "Failed to process shape definition")
 	}
 
-	if err := db.AddReplicatedCollection(ctx, s.pgPool, collectionName, shapeBytes); err != nil {
+	if err := s.dbOps.AddReplicatedCollection(ctx, s.pgPool, collectionName, shapeBytes); err != nil {
 		if errors.Is(err, db.ErrCollectionAlreadyExists) {
 			slog.Warn("Collection already exists", "collection", collectionName)
 			return nil, status.Errorf(codes.AlreadyExists, "Collection '%s' is already configured for replication", collectionName)
@@ -263,7 +316,7 @@ func (s *server) RemoveCollection(ctx context.Context, req *pb.RemoveCollectionR
 
 	slog.Info("Removing collection", "collection", collectionName)
 
-	if err := db.RemoveReplicatedCollection(ctx, s.pgPool, collectionName); err != nil {
+	if err := s.dbOps.RemoveReplicatedCollection(ctx, s.pgPool, collectionName); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			slog.Warn("Collection not found for removal", "collection", collectionName)
 			return nil, status.Errorf(codes.NotFound, "Collection %s not found for removal", collectionName)

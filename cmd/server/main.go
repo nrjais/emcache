@@ -82,7 +82,7 @@ func main() {
 	collectionCacheManager := collectioncache.NewManager(pgPool, cfg)
 	collectionCacheManager.Start(bgTaskCtx)
 
-	err = startCentralFollower(bgTaskCtx, &wg, pgPool, collectionCacheManager, cfg)
+	follower, err := startCentralFollower(bgTaskCtx, &wg, pgPool, collectionCacheManager, cfg)
 	if err != nil {
 		slog.Error("Failed to start central follower", "error", err)
 		os.Exit(1)
@@ -92,7 +92,7 @@ func main() {
 
 	startSnapshotCleanup(bgTaskCtx, &wg, cfg)
 
-	grpcServer := startGRPCServer(&wg, pgPool, cfg, collectionCacheManager)
+	grpcServer := startGRPCServer(&wg, pgPool, cfg, collectionCacheManager, follower)
 
 	waitForShutdownSignal()
 	slog.Info("Shutting down server")
@@ -150,14 +150,14 @@ func setupLeaderElector(pgPool *pgxpool.Pool) (*leader.LeaderElector, string) {
 	return leaderElector, instanceID
 }
 
-func startCentralFollower(ctx context.Context, wg *sync.WaitGroup, pgPool *pgxpool.Pool, cacheMgr *collectioncache.Manager, cfg *config.Config) error {
+func startCentralFollower(ctx context.Context, wg *sync.WaitGroup, pgPool *pgxpool.Pool, cacheMgr *collectioncache.Manager, cfg *config.Config) (follower.FollowerInterface, error) {
 	centralFollower, err := follower.NewMainFollower(db.NewPostgresPool(pgPool), cacheMgr, cfg.SQLiteDir, cfg)
 	if err != nil {
-		return fmt.Errorf("failed to create central follower: %w", err)
+		return nil, fmt.Errorf("failed to create central follower: %w", err)
 	}
 	wg.Add(1)
 	go centralFollower.Start(ctx, wg)
-	return nil
+	return centralFollower, nil
 }
 
 func startCollectionCoordinator(ctx context.Context, wg *sync.WaitGroup, pgPool *pgxpool.Pool, mongoClient *mongo.Client, mongoDBName string, leaderElector *leader.LeaderElector, cacheMgr *collectioncache.Manager, cfg *config.Config) {
@@ -296,7 +296,7 @@ func startSnapshotCleanup(ctx context.Context, wg *sync.WaitGroup, cfg *config.C
 	go snapshot.StartCleanupLoop(ctx, wg, snapshotTTL, cfg.SQLiteDir)
 }
 
-func startGRPCServer(wg *sync.WaitGroup, pgPool *pgxpool.Pool, cfg *config.Config, collectionCacheManager *collectioncache.Manager) *grpc.Server {
+func startGRPCServer(wg *sync.WaitGroup, pgPool *pgxpool.Pool, cfg *config.Config, collectionCacheManager *collectioncache.Manager, follower follower.FollowerInterface) *grpc.Server {
 	lis, err := net.Listen("tcp", cfg.GRPCPort)
 	if err != nil {
 		slog.Error("Failed to listen on port, gRPC server not started",
@@ -306,7 +306,7 @@ func startGRPCServer(wg *sync.WaitGroup, pgPool *pgxpool.Pool, cfg *config.Confi
 		return nil
 	}
 
-	grpcServerImpl := grpcapi.NewEmcacheServer(pgPool, cfg.SQLiteDir, collectionCacheManager)
+	grpcServerImpl := grpcapi.NewEmcacheServer(pgPool, cfg.SQLiteDir, collectionCacheManager, follower)
 	s := grpc.NewServer()
 	pb.RegisterEmcacheServiceServer(s, grpcServerImpl)
 

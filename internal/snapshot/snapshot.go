@@ -58,9 +58,7 @@ func GetOrGenerateSnapshot(ctx context.Context, dbPath string, baseDir string, s
 	}
 
 	defer snapshotManager.mu.Unlock()
-	slog.Info("Creating new snapshot",
-		"path", snapshotPath,
-		"source", dbPath)
+	slog.Info("Creating new snapshot", "path", snapshotPath, "source", dbPath)
 
 	if _, statErr := os.Stat(dbPath); statErr != nil {
 		if os.IsNotExist(statErr) {
@@ -70,8 +68,7 @@ func GetOrGenerateSnapshot(ctx context.Context, dbPath string, baseDir string, s
 	}
 
 	creationTime := time.Now()
-	slog.Info("Using SQLite backup API",
-		"path", snapshotPath)
+	slog.Info("Using SQLite backup API", "path", snapshotPath)
 
 	_ = os.Remove(snapshotPath)
 

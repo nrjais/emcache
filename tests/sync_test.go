@@ -83,6 +83,23 @@ func TestInitialSync(t *testing.T) {
 	verifyDocsInSQLite(t, emcacheClient, collectionName, initialDocsMap)
 }
 
+func TestEmptyCollectionSync(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	collectionName := "test_empty_collection_sync_" + uniqueId
+	numInitial := 0
+	initialDocsSlice, emcacheClient := setupSyncedCollection(t, ctx, numInitial, collectionName)
+
+	initialDocsMap := make(map[string]TestDoc)
+	for _, doc := range initialDocsSlice {
+		initialDocsMap[doc.ID] = doc
+	}
+
+	verifyDocsInSQLite(t, emcacheClient, collectionName, nil)
+}
+
 func TestInsertSync(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
