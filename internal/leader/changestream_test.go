@@ -1,6 +1,7 @@
 package leader
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -168,16 +169,18 @@ func TestTransformDocument(t *testing.T) {
 			},
 		}
 
-		result, err := transformDocument(sourceDoc, collShape)
+		result := transformDocument(sourceDoc, collShape)
 
-		require.NoError(t, err)
 		assert.NotNil(t, result)
 
 		// Verify it's valid JSON
-		assert.True(t, len(result) > 0)
-		assert.Contains(t, string(result), "full_name")
-		assert.Contains(t, string(result), "user_age")
-		assert.Contains(t, string(result), "John Doe")
+		jsonBytes, err := json.Marshal(result)
+		require.NoError(t, err)
+		resultStr := string(jsonBytes)
+		assert.True(t, len(resultStr) > 0)
+		assert.Contains(t, resultStr, "full_name")
+		assert.Contains(t, resultStr, "user_age")
+		assert.Contains(t, resultStr, "John Doe")
 	})
 
 	t.Run("transforms nested document", func(t *testing.T) {
@@ -203,12 +206,13 @@ func TestTransformDocument(t *testing.T) {
 			},
 		}
 
-		result, err := transformDocument(sourceDoc, collShape)
+		result := transformDocument(sourceDoc, collShape)
 
-		require.NoError(t, err)
 		assert.NotNil(t, result)
 
-		resultStr := string(result)
+		jsonBytes, err := json.Marshal(result)
+		require.NoError(t, err)
+		resultStr := string(jsonBytes)
 		assert.Contains(t, resultStr, "John Doe")
 		assert.Contains(t, resultStr, "dark")
 	})
@@ -228,12 +232,13 @@ func TestTransformDocument(t *testing.T) {
 			},
 		}
 
-		result, err := transformDocument(sourceDoc, collShape)
+		result := transformDocument(sourceDoc, collShape)
 
-		require.NoError(t, err)
 		assert.NotNil(t, result)
 
-		resultStr := string(result)
+		jsonBytes, err := json.Marshal(result)
+		require.NoError(t, err)
+		resultStr := string(jsonBytes)
 		assert.Contains(t, resultStr, "John Doe")
 		assert.Contains(t, resultStr, "null") // Missing fields should be null
 	})
@@ -261,12 +266,13 @@ func TestTransformDocument(t *testing.T) {
 			},
 		}
 
-		result, err := transformDocument(sourceDoc, collShape)
+		result := transformDocument(sourceDoc, collShape)
 
-		require.NoError(t, err)
 		assert.NotNil(t, result)
 
-		resultStr := string(result)
+		jsonBytes, err := json.Marshal(result)
+		require.NoError(t, err)
+		resultStr := string(jsonBytes)
 		assert.Contains(t, resultStr, "John Doe")
 		assert.Contains(t, resultStr, "30")
 		assert.Contains(t, resultStr, "true")
@@ -283,13 +289,14 @@ func TestTransformDocument(t *testing.T) {
 			Columns: []shape.Column{}, // No columns
 		}
 
-		result, err := transformDocument(sourceDoc, collShape)
+		result := transformDocument(sourceDoc, collShape)
 
-		require.NoError(t, err)
 		assert.NotNil(t, result)
 
 		// Should produce empty JSON object
-		assert.Equal(t, "{}", string(result))
+		jsonBytes, err := json.Marshal(result)
+		require.NoError(t, err)
+		assert.Equal(t, "{}", string(jsonBytes))
 	})
 
 	t.Run("handles root path transformation", func(t *testing.T) {
@@ -306,12 +313,13 @@ func TestTransformDocument(t *testing.T) {
 			},
 		}
 
-		result, err := transformDocument(sourceDoc, collShape)
+		result := transformDocument(sourceDoc, collShape)
 
-		require.NoError(t, err)
 		assert.NotNil(t, result)
 
-		resultStr := string(result)
+		jsonBytes, err := json.Marshal(result)
+		require.NoError(t, err)
+		resultStr := string(jsonBytes)
 		assert.Contains(t, resultStr, "document")
 	})
 
@@ -333,9 +341,8 @@ func TestTransformDocument(t *testing.T) {
 			},
 		}
 
-		result, err := transformDocument(sourceDoc, collShape)
+		result := transformDocument(sourceDoc, collShape)
 
-		require.NoError(t, err)
 		assert.NotNil(t, result)
 		assert.True(t, len(result) > 0)
 	})
@@ -362,14 +369,10 @@ func TestTransformDocument_ErrorCases(t *testing.T) {
 
 		// This should not panic or loop infinitely
 		// The JSON marshaler should handle circular references
-		result, err := transformDocument(sourceDoc, collShape)
+		result := transformDocument(sourceDoc, collShape)
 
-		// Either succeeds or fails gracefully
-		if err != nil {
-			assert.Contains(t, err.Error(), "marshal")
-		} else {
-			assert.NotNil(t, result)
-		}
+		// Should not panic
+		assert.NotNil(t, result)
 	})
 }
 
@@ -394,15 +397,339 @@ func TestTransformDocument_Performance(t *testing.T) {
 			},
 		}
 
-		result, err := transformDocument(sourceDoc, collShape)
+		result := transformDocument(sourceDoc, collShape)
 
-		require.NoError(t, err)
 		assert.NotNil(t, result)
 		assert.True(t, len(result) > 0)
 
-		resultStr := string(result)
+		jsonBytes, err := json.Marshal(result)
+		require.NoError(t, err)
+		resultStr := string(jsonBytes)
 		assert.Contains(t, resultStr, "value_0")
 		assert.Contains(t, resultStr, "value_500")
 		assert.Contains(t, resultStr, "value_999")
+	})
+}
+
+func TestTransformDocument_AdditionalCases(t *testing.T) {
+	t.Run("handles array access in dot notation", func(t *testing.T) {
+		sourceDoc := bson.M{
+			"_id": primitive.NewObjectID(),
+			"items": []any{
+				bson.M{"name": "item1", "value": 100},
+				bson.M{"name": "item2", "value": 200},
+			},
+		}
+
+		collShape := shape.Shape{
+			Columns: []shape.Column{
+				{Name: "id", Type: shape.Text, Path: "_id"},
+				{Name: "first_item_name", Type: shape.Text, Path: "items.0.name"},
+				{Name: "second_item_value", Type: shape.Integer, Path: "items.1.value"},
+			},
+		}
+
+		result := transformDocument(sourceDoc, collShape)
+
+		assert.NotNil(t, result)
+		jsonBytes, err := json.Marshal(result)
+		require.NoError(t, err)
+		resultStr := string(jsonBytes)
+		assert.Contains(t, resultStr, "item1")
+		assert.Contains(t, resultStr, "200")
+	})
+
+	t.Run("handles non-map values in path", func(t *testing.T) {
+		sourceDoc := bson.M{
+			"_id":  primitive.NewObjectID(),
+			"name": "John",
+			"age":  30,
+		}
+
+		collShape := shape.Shape{
+			Columns: []shape.Column{
+				{Name: "id", Type: shape.Text, Path: "_id"},
+				{Name: "name", Type: shape.Text, Path: "name"},
+				{Name: "invalid", Type: shape.Text, Path: "name.first"}, // name is a string, not a map
+			},
+		}
+
+		result := transformDocument(sourceDoc, collShape)
+
+		assert.NotNil(t, result)
+		jsonBytes, err := json.Marshal(result)
+		require.NoError(t, err)
+		resultStr := string(jsonBytes)
+		assert.Contains(t, resultStr, "John")
+		assert.Contains(t, resultStr, "null") // invalid path should be null
+	})
+
+	t.Run("handles empty paths", func(t *testing.T) {
+		sourceDoc := bson.M{
+			"_id":  primitive.NewObjectID(),
+			"name": "John",
+		}
+
+		collShape := shape.Shape{
+			Columns: []shape.Column{
+				{Name: "id", Type: shape.Text, Path: "_id"},
+				{Name: "empty", Type: shape.Text, Path: ""}, // empty path
+			},
+		}
+
+		result := transformDocument(sourceDoc, collShape)
+
+		assert.NotNil(t, result)
+		jsonBytes, err := json.Marshal(result)
+		require.NoError(t, err)
+		resultStr := string(jsonBytes)
+		assert.Contains(t, resultStr, "null") // empty path should be null
+	})
+
+	t.Run("handles duplicate column names", func(t *testing.T) {
+		sourceDoc := bson.M{
+			"_id":  primitive.NewObjectID(),
+			"name": "John",
+		}
+
+		collShape := shape.Shape{
+			Columns: []shape.Column{
+				{Name: "name", Type: shape.Text, Path: "_id"},  // duplicate name
+				{Name: "name", Type: shape.Text, Path: "name"}, // duplicate name
+			},
+		}
+
+		result := transformDocument(sourceDoc, collShape)
+
+		assert.NotNil(t, result)
+		jsonBytes, err := json.Marshal(result)
+		require.NoError(t, err)
+		resultStr := string(jsonBytes)
+		// Last column with same name should override previous ones
+		assert.Contains(t, resultStr, "John")
+	})
+
+	t.Run("handles nil source document", func(t *testing.T) {
+		collShape := shape.Shape{
+			Columns: []shape.Column{
+				{Name: "id", Type: shape.Text, Path: "_id"},
+				{Name: "name", Type: shape.Text, Path: "name"},
+			},
+		}
+
+		result := transformDocument(nil, collShape)
+
+		assert.NotNil(t, result)
+		jsonBytes, err := json.Marshal(result)
+		require.NoError(t, err)
+		resultStr := string(jsonBytes)
+		assert.Contains(t, resultStr, "null") // all fields should be null
+	})
+
+	t.Run("handles nil shape", func(t *testing.T) {
+		sourceDoc := bson.M{
+			"_id":  primitive.NewObjectID(),
+			"name": "John",
+		}
+
+		result := transformDocument(sourceDoc, shape.Shape{})
+
+		assert.NotNil(t, result)
+		jsonBytes, err := json.Marshal(result)
+		require.NoError(t, err)
+		assert.Equal(t, "{}", string(jsonBytes)) // should be empty object
+	})
+}
+
+func TestFilterAndGetDoc(t *testing.T) {
+	t.Run("returns transformed document when no filters", func(t *testing.T) {
+		sourceDoc := bson.M{
+			"_id":  primitive.NewObjectID(),
+			"name": "John",
+			"age":  30,
+		}
+
+		collShape := shape.Shape{
+			Columns: []shape.Column{
+				{Name: "id", Type: shape.Text, Path: "_id"},
+				{Name: "name", Type: shape.Text, Path: "name"},
+				{Name: "age", Type: shape.Integer, Path: "age"},
+			},
+		}
+
+		data, skip, err := filterAndGetDoc(sourceDoc, collShape)
+
+		require.NoError(t, err)
+		assert.False(t, skip)
+		assert.NotNil(t, data)
+		assert.Contains(t, string(data), "John")
+		assert.Contains(t, string(data), "30")
+	})
+
+	t.Run("returns skip=true when filter doesn't match", func(t *testing.T) {
+		sourceDoc := bson.M{
+			"_id":  primitive.NewObjectID(),
+			"name": "John",
+			"age":  30,
+		}
+
+		collShape := shape.Shape{
+			Columns: []shape.Column{
+				{Name: "id", Type: shape.Text, Path: "_id"},
+				{Name: "name", Type: shape.Text, Path: "name"},
+				{Name: "age", Type: shape.Integer, Path: "age"},
+			},
+			Filters: []shape.Filter{
+				{Path: "age", Value: "25"}, // Filter for age=25, but doc has age=30
+			},
+		}
+
+		data, skip, err := filterAndGetDoc(sourceDoc, collShape)
+
+		require.NoError(t, err)
+		assert.True(t, skip)
+		assert.Nil(t, data)
+	})
+
+	t.Run("returns transformed document when filter matches", func(t *testing.T) {
+		sourceDoc := bson.M{
+			"_id":  primitive.NewObjectID(),
+			"name": "John",
+			"age":  30,
+		}
+
+		collShape := shape.Shape{
+			Columns: []shape.Column{
+				{Name: "id", Type: shape.Text, Path: "_id"},
+				{Name: "name", Type: shape.Text, Path: "name"},
+				{Name: "age", Type: shape.Integer, Path: "age"},
+			},
+			Filters: []shape.Filter{
+				{Path: "age", Value: "30"}, // Filter matches
+			},
+		}
+
+		data, skip, err := filterAndGetDoc(sourceDoc, collShape)
+
+		require.NoError(t, err)
+		assert.False(t, skip)
+		assert.NotNil(t, data)
+		assert.Contains(t, string(data), "John")
+		assert.Contains(t, string(data), "30")
+	})
+
+	t.Run("handles multiple filters", func(t *testing.T) {
+		sourceDoc := bson.M{
+			"_id":  primitive.NewObjectID(),
+			"name": "John",
+			"age":  30,
+			"role": "admin",
+		}
+
+		collShape := shape.Shape{
+			Columns: []shape.Column{
+				{Name: "id", Type: shape.Text, Path: "_id"},
+				{Name: "name", Type: shape.Text, Path: "name"},
+				{Name: "age", Type: shape.Integer, Path: "age"},
+				{Name: "role", Type: shape.Text, Path: "role"},
+			},
+			Filters: []shape.Filter{
+				{Path: "age", Value: "30"},
+				{Path: "role", Value: "admin"},
+			},
+		}
+
+		data, skip, err := filterAndGetDoc(sourceDoc, collShape)
+
+		require.NoError(t, err)
+		assert.False(t, skip)
+		assert.NotNil(t, data)
+		assert.Contains(t, string(data), "John")
+		assert.Contains(t, string(data), "30")
+		assert.Contains(t, string(data), "admin")
+	})
+
+	t.Run("handles nested field filters", func(t *testing.T) {
+		sourceDoc := bson.M{
+			"_id": primitive.NewObjectID(),
+			"user": bson.M{
+				"profile": bson.M{
+					"name": "John",
+					"age":  30,
+				},
+			},
+		}
+
+		collShape := shape.Shape{
+			Columns: []shape.Column{
+				{Name: "id", Type: shape.Text, Path: "_id"},
+				{Name: "name", Type: shape.Text, Path: "user.profile.name"},
+				{Name: "age", Type: shape.Integer, Path: "user.profile.age"},
+			},
+			Filters: []shape.Filter{
+				{Path: "user.profile.age", Value: "30"},
+			},
+		}
+
+		data, skip, err := filterAndGetDoc(sourceDoc, collShape)
+
+		require.NoError(t, err)
+		assert.False(t, skip)
+		assert.NotNil(t, data)
+		assert.Contains(t, string(data), "John")
+		assert.Contains(t, string(data), "30")
+	})
+
+	t.Run("handles missing filter fields", func(t *testing.T) {
+		sourceDoc := bson.M{
+			"_id":  primitive.NewObjectID(),
+			"name": "John",
+		}
+
+		collShape := shape.Shape{
+			Columns: []shape.Column{
+				{Name: "id", Type: shape.Text, Path: "_id"},
+				{Name: "name", Type: shape.Text, Path: "name"},
+			},
+			Filters: []shape.Filter{
+				{Path: "age", Value: "30"}, // Filter for non-existent field
+			},
+		}
+
+		data, skip, err := filterAndGetDoc(sourceDoc, collShape)
+
+		require.NoError(t, err)
+		assert.True(t, skip) // Should skip when filter field doesn't exist
+		assert.Nil(t, data)
+	})
+
+	t.Run("handles nil document", func(t *testing.T) {
+		collShape := shape.Shape{
+			Columns: []shape.Column{
+				{Name: "id", Type: shape.Text, Path: "_id"},
+				{Name: "name", Type: shape.Text, Path: "name"},
+			},
+		}
+
+		data, skip, err := filterAndGetDoc(nil, collShape)
+
+		require.NoError(t, err)
+		assert.True(t, skip)
+		assert.Nil(t, data)
+	})
+
+	t.Run("handles empty shape", func(t *testing.T) {
+		sourceDoc := bson.M{
+			"_id":  primitive.NewObjectID(),
+			"name": "John",
+		}
+
+		collShape := shape.Shape{}
+
+		data, skip, err := filterAndGetDoc(sourceDoc, collShape)
+
+		require.NoError(t, err)
+		assert.True(t, skip)
+		assert.Nil(t, data)
 	})
 }

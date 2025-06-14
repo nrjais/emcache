@@ -425,6 +425,14 @@ func convertProtoShapeToInternal(ps *pb.Shape) (shape.Shape, error) {
 		internalShape.Indexes = append(internalShape.Indexes, convertProtoIndex(pi))
 	}
 
+	internalShape.Filters = make([]shape.Filter, 0, len(ps.GetFilters()))
+	for _, pf := range ps.GetFilters() {
+		internalShape.Filters = append(internalShape.Filters, shape.Filter{
+			Path:  pf.GetPath(),
+			Value: pf.GetValue(),
+		})
+	}
+
 	if len(internalShape.Columns) == 0 {
 		return shape.Shape{}, fmt.Errorf("shape must have at least one data column defined")
 	}
@@ -479,6 +487,14 @@ func convertInternalShapeToProto(is shape.Shape) *pb.Shape {
 
 	for _, ii := range is.Indexes {
 		protoShape.Indexes = append(protoShape.Indexes, convertInternalIndexToProto(ii))
+	}
+
+	protoShape.Filters = make([]*pb.Filter, 0, len(is.Filters))
+	for _, f := range is.Filters {
+		protoShape.Filters = append(protoShape.Filters, &pb.Filter{
+			Path:  f.Path,
+			Value: f.Value,
+		})
 	}
 
 	return protoShape

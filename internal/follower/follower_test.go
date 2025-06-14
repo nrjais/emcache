@@ -2,6 +2,7 @@ package follower
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
+	"zombiezen.com/go/sqlite"
+	"zombiezen.com/go/sqlite/sqlitex"
 
 	"github.com/nrjais/emcache/internal/collectioncache/mocks"
 	"github.com/nrjais/emcache/internal/config"
@@ -182,57 +185,50 @@ func TestMapValueToSqlite(t *testing.T) {
 		assert.Nil(t, result)
 	})
 
-	t.Run("handles boolean true", func(t *testing.T) {
-		result := mapValueToSqlite(true)
-		assert.Equal(t, 1, result)
+	t.Run("handles string value", func(t *testing.T) {
+		result := mapValueToSqlite("test")
+		assert.Equal(t, "test", result)
 	})
 
-	t.Run("handles boolean false", func(t *testing.T) {
-		result := mapValueToSqlite(false)
+	t.Run("handles int64 value", func(t *testing.T) {
+		result := mapValueToSqlite(int64(42))
+		assert.Equal(t, int64(42), result)
+	})
+
+	t.Run("handles float64 value", func(t *testing.T) {
+		result := mapValueToSqlite(float64(3.14))
+		assert.Equal(t, float64(3.14), result)
+	})
+
+	t.Run("handles bool value", func(t *testing.T) {
+		result := mapValueToSqlite(true)
+		assert.Equal(t, 1, result)
+		result = mapValueToSqlite(false)
 		assert.Equal(t, 0, result)
 	})
 
-	t.Run("passes through string", func(t *testing.T) {
-		result := mapValueToSqlite("test string")
-		assert.Equal(t, "test string", result)
+	t.Run("handles []byte value", func(t *testing.T) {
+		testBytes := []byte("test")
+		result := mapValueToSqlite(testBytes)
+		assert.Equal(t, testBytes, result)
 	})
 
-	t.Run("passes through integer", func(t *testing.T) {
-		result := mapValueToSqlite(42)
-		bytes, ok := result.([]byte)
-		require.True(t, ok)
-		assert.Contains(t, string(bytes), "42")
-	})
-
-	t.Run("passes through float", func(t *testing.T) {
-		result := mapValueToSqlite(3.14)
-		assert.Equal(t, 3.14, result)
-	})
-
-	t.Run("converts complex object to JSON bytes", func(t *testing.T) {
-		input := map[string]interface{}{
-			"name": "John",
-			"age":  30,
+	t.Run("handles complex type with JSON marshaling", func(t *testing.T) {
+		type TestStruct struct {
+			Name string `json:"name"`
+			Age  int    `json:"age"`
 		}
-
-		result := mapValueToSqlite(input)
-
-		bytes, ok := result.([]byte)
-		require.True(t, ok)
-		assert.Contains(t, string(bytes), "John")
-		assert.Contains(t, string(bytes), "30")
+		testStruct := TestStruct{Name: "John", Age: 30}
+		result := mapValueToSqlite(testStruct)
+		expectedJSON, _ := json.Marshal(testStruct)
+		assert.Equal(t, expectedJSON, result)
 	})
 
-	t.Run("converts slice to JSON bytes", func(t *testing.T) {
-		input := []string{"apple", "banana", "cherry"}
-
-		result := mapValueToSqlite(input)
-
-		bytes, ok := result.([]byte)
-		require.True(t, ok)
-		assert.Contains(t, string(bytes), "apple")
-		assert.Contains(t, string(bytes), "banana")
-		assert.Contains(t, string(bytes), "cherry")
+	t.Run("handles complex type with JSON marshaling error", func(t *testing.T) {
+		// Create a channel which cannot be marshaled to JSON
+		ch := make(chan int)
+		result := mapValueToSqlite(ch)
+		assert.Nil(t, result)
 	})
 }
 
@@ -682,5 +678,180 @@ func TestMainFollower_NewMainFollowerIncludesUpdateTracker(t *testing.T) {
 		assert.Equal(t, 0, len(follower.updateTracker.lastCommittedOffset))
 
 		follower.metaDB.Close()
+	})
+}
+
+func TestApplyOplogEntry(t *testing.T) {
+	t.Run("handles UPSERT operation", func(t *testing.T) {
+		conn, err := sqlite.OpenConn(":memory:", sqlite.OpenReadWrite)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Initialize metadata table
+		err = initMetaTable(conn)
+		require.NoError(t, err)
+
+		// Create test shape
+		collShape := shape.Shape{
+			Columns: []shape.Column{
+				{Name: "name", Type: shape.Text, Path: "name"},
+				{Name: "age", Type: shape.Integer, Path: "age"},
+			},
+		}
+
+		// Create data table
+		err = ensureCollectionTableAndIndexes(conn, collShape)
+		require.NoError(t, err)
+
+		// Create test document
+		doc := map[string]any{
+			"name": "John",
+			"age":  30,
+		}
+		docJSON, err := json.Marshal(doc)
+		require.NoError(t, err)
+
+		// Create oplog entry
+		entry := db.OplogEntry{
+			Operation:  "UPSERT",
+			DocID:      "test123",
+			Collection: "test",
+			Doc:        docJSON,
+		}
+
+		// Apply oplog entry
+		err = applyOplogEntry(conn, entry, collShape)
+		require.NoError(t, err)
+
+		// Verify document was inserted
+		var name string
+		var age int64
+		err = sqlitex.Execute(conn, "SELECT name, age FROM data WHERE id = ?", &sqlitex.ExecOptions{
+			Args: []any{"test123"},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				name = stmt.ColumnText(0)
+				age = stmt.ColumnInt64(1)
+				return nil
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "John", name)
+		assert.Equal(t, int64(30), age)
+	})
+
+	t.Run("handles DELETE operation", func(t *testing.T) {
+		conn, err := sqlite.OpenConn(":memory:", sqlite.OpenReadWrite)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Initialize metadata table
+		err = initMetaTable(conn)
+		require.NoError(t, err)
+
+		// Create test shape
+		collShape := shape.Shape{
+			Columns: []shape.Column{
+				{Name: "name", Type: shape.Text, Path: "name"},
+			},
+		}
+
+		// Create data table
+		err = ensureCollectionTableAndIndexes(conn, collShape)
+		require.NoError(t, err)
+
+		// Insert test document
+		err = sqlitex.Execute(conn, "INSERT INTO data (id, name) VALUES (?, ?)", &sqlitex.ExecOptions{
+			Args: []any{"test123", "John"},
+		})
+		require.NoError(t, err)
+
+		// Create oplog entry for delete
+		entry := db.OplogEntry{
+			Operation:  "DELETE",
+			DocID:      "test123",
+			Collection: "test",
+		}
+
+		// Apply oplog entry
+		err = applyOplogEntry(conn, entry, collShape)
+		require.NoError(t, err)
+
+		// Verify document was deleted
+		var count int
+		err = sqlitex.Execute(conn, "SELECT COUNT(*) FROM data WHERE id = ?", &sqlitex.ExecOptions{
+			Args: []any{"test123"},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				count = stmt.ColumnInt(0)
+				return nil
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 0, count)
+	})
+
+	t.Run("handles unknown operation", func(t *testing.T) {
+		conn, err := sqlite.OpenConn(":memory:", sqlite.OpenReadWrite)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Initialize metadata table
+		err = initMetaTable(conn)
+		require.NoError(t, err)
+
+		// Create test shape
+		collShape := shape.Shape{
+			Columns: []shape.Column{
+				{Name: "name", Type: shape.Text, Path: "name"},
+			},
+		}
+
+		// Create data table
+		err = ensureCollectionTableAndIndexes(conn, collShape)
+		require.NoError(t, err)
+
+		// Create oplog entry with unknown operation
+		entry := db.OplogEntry{
+			Operation:  "UNKNOWN",
+			DocID:      "test123",
+			Collection: "test",
+		}
+
+		// Apply oplog entry
+		err = applyOplogEntry(conn, entry, collShape)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown oplog operation")
+	})
+
+	t.Run("handles UPSERT with nil document", func(t *testing.T) {
+		conn, err := sqlite.OpenConn(":memory:", sqlite.OpenReadWrite)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Initialize metadata table
+		err = initMetaTable(conn)
+		require.NoError(t, err)
+
+		// Create test shape
+		collShape := shape.Shape{
+			Columns: []shape.Column{
+				{Name: "name", Type: shape.Text, Path: "name"},
+			},
+		}
+
+		// Create data table
+		err = ensureCollectionTableAndIndexes(conn, collShape)
+		require.NoError(t, err)
+
+		// Create oplog entry with nil document
+		entry := db.OplogEntry{
+			Operation:  "UPSERT",
+			DocID:      "test123",
+			Collection: "test",
+			Doc:        nil,
+		}
+
+		// Apply oplog entry
+		err = applyOplogEntry(conn, entry, collShape)
+		require.NoError(t, err) // Should not error, just log a warning
 	})
 }

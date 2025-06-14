@@ -21,7 +21,13 @@ type Index struct {
 	Columns []string `json:"columns" validate:"required,min=1,dive,alphanum,min=1,max=255"`
 }
 
+type Filter struct {
+	Path  string `json:"path" validate:"required,min=1,max=255"`
+	Value string `json:"value" validate:"required,min=1,max=255"`
+}
+
 type Shape struct {
 	Columns []Column `json:"columns" validate:"required,min=1,dive"`
 	Indexes []Index  `json:"indexes" validate:"omitempty,dive"`
+	Filters []Filter `json:"filter,omitempty"`
 }

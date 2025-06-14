@@ -46,19 +46,38 @@ func getValueByDotPath(data map[string]any, path string) any {
 	return current
 }
 
-func transformDocument(sourceDoc bson.M, collShape shape.Shape) (transformedDocJSON []byte, err error) {
+func transformDocument(sourceDoc bson.M, collShape shape.Shape) map[string]any {
 	transformedData := make(map[string]any)
 	for _, col := range collShape.Columns {
 		value := getValueByDotPath(sourceDoc, col.Path)
 		transformedData[col.Name] = value
 	}
 
-	jsonData, jsonErr := json.Marshal(transformedData)
-	if jsonErr != nil {
-		return nil, fmt.Errorf("failed to marshal transformed document: %w", jsonErr)
+	return transformedData
+}
+
+func filterAndGetDoc(fullDoc bson.M, collShape shape.Shape) ([]byte, bool, error) {
+	data := transformDocument(fullDoc, collShape)
+
+	matches := len(collShape.Filters) == 0
+	for _, filter := range collShape.Filters {
+		actualValue := getValueByDotPath(data, filter.Path)
+		if actualValue != filter.Value {
+			matches = false
+			break
+		}
 	}
 
-	return jsonData, nil
+	if !matches {
+		return nil, true, nil
+	}
+
+	jsn, err := json.Marshal(data)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to marshal transformed document: %w", err)
+	}
+
+	return jsn, false, nil
 }
 
 func StartChangeStreamListener(
@@ -339,6 +358,7 @@ func processChangeEvent(ctx context.Context, pool db.PostgresPool, event bson.M,
 
 	var operation string
 	var data []byte
+	var skip bool
 	var err error
 
 	switch opTypeStr {
@@ -346,32 +366,22 @@ func processChangeEvent(ctx context.Context, pool db.PostgresPool, event bson.M,
 		operation = "UPSERT"
 		fullDoc, ok := event["fullDocument"].(bson.M)
 		if !ok {
-			slog.Warn("UPSERT event missing fullDocument ID",
-				"role", "Leader",
-				"collection", collectionName,
-				"doc_id", docID,
-				"event", fmt.Sprintf("%v", event))
+			slog.Warn("UPSERT event missing fullDocument", "role", "Leader", "collection", collectionName, "doc_id", docID, "event", fmt.Sprintf("%v", event))
 			return nil
 		}
-
-		data, err = transformDocument(fullDoc, collShape)
+		data, skip, err = filterAndGetDoc(fullDoc, collShape)
 		if err != nil {
-			slog.Warn("Failed to transform document for ID",
-				"role", "Leader",
-				"collection", collectionName,
-				"doc_id", docID,
-				"error", err)
-			return nil
+			return fmt.Errorf("failed to filter and get doc: %w", err)
 		}
 	case "delete":
 		operation = "DELETE"
-
 	default:
-		slog.Warn("Skipping unhandled operation type",
-			"role", "Leader",
-			"collection", collectionName,
-			"op_type", opTypeStr,
-			"doc_id", docID)
+		slog.Warn("Skipping unhandled operation type", "role", "Leader", "collection", collectionName, "op_type", opTypeStr, "doc_id", docID)
+		return nil
+	}
+
+	if skip {
+		slog.Info("Skipping document due to filter", "role", "Leader", "collection", collectionName, "doc_id", docID)
 		return nil
 	}
 
@@ -386,15 +396,10 @@ func processChangeEvent(ctx context.Context, pool db.PostgresPool, event bson.M,
 
 	idx, err := db.InsertOplogEntry(ctx, pool, oplogEntry)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to insert oplog entry: %w", err)
 	}
 
-	slog.Info("Processed",
-		"role", "Leader",
-		"collection", collectionName,
-		"operation", operation,
-		"doc_id", docID,
-		"oplog_index", idx)
+	slog.Info("Processed", "role", "Leader", "collection", collectionName, "operation", operation, "doc_id", docID, "oplog_index", idx)
 	return nil
 }
 
@@ -414,9 +419,9 @@ func performInitialScan(ctx context.Context, pool db.PostgresPool, coll *mongo.C
 			return fmt.Errorf("failed to decode document during initial scan: %w", err)
 		}
 
-		docID, err := createAndInsertEntry(ctx, pool, doc, collectionName, version, collShape)
+		err := createAndInsertEntry(ctx, pool, doc, collectionName, version, collShape)
 		if err != nil {
-			return fmt.Errorf("failed to create and insert entry for doc %s: %w", docID, err)
+			return fmt.Errorf("failed to create and insert entry: %w", err)
 		}
 
 		scanCount++
@@ -440,14 +445,14 @@ func performInitialScan(ctx context.Context, pool db.PostgresPool, coll *mongo.C
 	return nil
 }
 
-func createAndInsertEntry(ctx context.Context, pool db.PostgresPool, doc bson.M, collectionName string, version int, collShape shape.Shape) (string, error) {
+func createAndInsertEntry(ctx context.Context, pool db.PostgresPool, doc bson.M, collectionName string, version int, collShape shape.Shape) error {
 	docIDRaw, ok := doc["_id"]
 	if !ok {
 		slog.Warn("Skipping document with missing _id during initial scan",
 			"role", "Leader",
 			"collection", collectionName,
 			"doc", fmt.Sprintf("%v", doc))
-		return "", fmt.Errorf("document with missing _id during initial scan: %v", doc)
+		return fmt.Errorf("document with missing _id during initial scan: %v", doc)
 	}
 	var docID string
 	switch v := docIDRaw.(type) {
@@ -457,15 +462,24 @@ func createAndInsertEntry(ctx context.Context, pool db.PostgresPool, doc bson.M,
 		docID = fmt.Sprintf("%v", v)
 	}
 
-	data, err := transformDocument(doc, collShape)
+	data, skip, err := filterAndGetDoc(doc, collShape)
 	if err != nil {
 		slog.Warn("Failed to transform document for ID",
 			"role", "Leader",
 			"collection", collectionName,
 			"doc_id", docID,
 			"error", err)
-		return docID, fmt.Errorf("failed to transform document for ID %s: %w", docID, err)
+		return fmt.Errorf("failed to transform document for ID %s: %w", docID, err)
 	}
+
+	if skip {
+		slog.Info("Skipping document due to filter",
+			"role", "Leader",
+			"collection", collectionName,
+			"doc_id", docID)
+		return nil
+	}
+
 	oplogEntry := db.OplogEntry{
 		Operation:  "UPSERT",
 		DocID:      docID,
@@ -476,8 +490,8 @@ func createAndInsertEntry(ctx context.Context, pool db.PostgresPool, doc bson.M,
 	}
 	_, err = db.InsertOplogEntry(ctx, pool, oplogEntry)
 	if err != nil {
-		return docID, fmt.Errorf("failed to insert initial scan oplog entry for doc %s: %w", docID, err)
+		return fmt.Errorf("failed to insert initial scan oplog entry for doc %s: %w", docID, err)
 	}
 
-	return docID, nil
+	return nil
 }
