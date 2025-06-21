@@ -1,0 +1,100 @@
+# EMCachers Configuration Template
+# Copy this file to config.toml and customize for your environment
+
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[database]
+# PostgreSQL connection string
+postgres_url = "postgresql://emcachers:password@localhost:5432/emcachers"
+
+# MongoDB connection string (for change stream listening)
+mongodb_url = "mongodb://localhost:27017/myapp"
+
+[batch]
+# Batch size for oplog processing
+oplog_batch_size = 1000
+
+# Batch size for PostgreSQL operations
+postgres_batch_size = 500
+
+# Batch size for MongoDB operations
+mongodb_batch_size = 1000
+
+[intervals]
+# Entity refresh interval in seconds
+entity_refresh_seconds = 60
+
+# Oplog processing interval in seconds
+oplog_processing_seconds = 5
+
+# Cache replication interval in seconds
+cache_replication_seconds = 5
+
+# Health check interval in seconds
+health_check_seconds = 30
+
+# Connection cleanup interval in seconds
+connection_cleanup_seconds = 300
+
+[pools]
+# PostgreSQL connection pool settings
+postgres_max_connections = 20
+postgres_min_connections = 5
+
+# SQLite connection pool settings per entity
+sqlite_max_connections = 10
+sqlite_min_connections = 2
+
+[retry]
+# Maximum retry attempts for failed operations
+max_attempts = 3
+
+# Initial delay between retries in milliseconds
+initial_delay_ms = 1000
+
+# Backoff multiplier for exponential backoff
+backoff_multiplier = 2.0
+
+# Maximum delay between retries in milliseconds
+max_delay_ms = 30000
+
+[circuit_breaker]
+# Failure threshold to open circuit
+failure_threshold = 5
+
+# Success threshold to close circuit
+success_threshold = 3
+
+# Timeout in seconds before attempting recovery
+timeout_seconds = 60
+
+[monitoring]
+# Enable detailed monitoring
+enabled = true
+
+# Alert thresholds
+cpu_threshold_percent = 80.0
+memory_threshold_percent = 85.0
+error_rate_threshold_percent = 5.0
+
+# Performance measurement
+track_performance = true
+
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+
+# Log format: json, pretty
+format = "pretty"
+
+[cache]
+# Base directory for SQLite cache databases
+base_dir = "dbs"
+
+# Enable automatic cleanup of unused connections
+auto_cleanup = true
+
+# Connection expiry time in seconds
+connection_expiry_seconds = 3600
