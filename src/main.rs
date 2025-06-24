@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{error, info, warn};
 
 mod api;
@@ -11,24 +11,22 @@ mod database;
 mod database_cleanup_job;
 mod entity_manager;
 mod job_server;
+pub mod mongo;
 mod mongo_client;
-mod monitoring;
 mod oplog;
 mod resume_token_manager;
+pub mod storage;
 mod types;
 mod utils;
 
-use crate::api::ApiServer;
 use crate::cache_db_manager::CacheDbManager;
 use crate::cache_replicator::CacheReplicator;
 use crate::config::AppConfig;
 use crate::database::DatabaseManager;
 use crate::database_cleanup_job::DatabaseCleanupJob;
 use crate::entity_manager::EntityManager;
-use crate::job_server::{create_job_config, JobServer};
+use crate::job_server::{JobServer, create_job_config};
 use crate::mongo_client::{ChangeStreamHandle, MongoClient};
-use crate::monitoring::SystemMonitor;
-use crate::oplog::manager::OplogManager;
 use crate::resume_token_manager::ResumeTokenManager;
 use types::{Entity, Oplog};
 
@@ -230,32 +228,9 @@ async fn main() -> Result<()> {
     mongo_client.connect(&config.database.mongodb_url).await?;
     info!("MongoDB client connected");
 
-    // Initialize monitoring
-    let system_monitor = Arc::new(SystemMonitor::new());
-    system_monitor.start_monitoring()?;
-    info!("System monitoring started");
-
     // Set up oplog processing channels
     let (oplog_sender, oplog_receiver) = mpsc::channel::<Oplog>(1000);
     let (ack_sender, mut ack_receiver) = mpsc::channel::<i64>(100);
-
-    // Initialize oplog manager with channels
-    let mut oplog_manager = Arc::new(
-        OplogManager::new(
-            config.clone(),
-            Arc::clone(&db_manager),
-            Arc::clone(&entity_manager),
-        )
-        .await?,
-    );
-
-    // Set up oplog processing channels
-    {
-        let oplog_manager_mut = Arc::get_mut(&mut oplog_manager).unwrap();
-        oplog_manager_mut.setup_channels(oplog_receiver, ack_sender);
-        oplog_manager_mut.start_processing().await?;
-    }
-    info!("Oplog manager initialized and processing started");
 
     // Initialize cache replicator
     let cache_replicator = Arc::new(
@@ -332,25 +307,6 @@ async fn main() -> Result<()> {
         .await?;
     info!("Database cleanup job registered");
 
-    // Register oplog manager job
-    job_server
-        .register_job(
-            OplogManager::new(
-                config.clone(),
-                Arc::clone(&db_manager),
-                Arc::clone(&entity_manager),
-            )
-            .await?,
-            create_job_config(
-                "oplog_maintenance",
-                std::time::Duration::from_secs(300), // 5 minutes
-                3,
-                std::time::Duration::from_secs(10),
-            ),
-        )
-        .await?;
-    info!("Oplog manager job registered");
-
     // Load entities and start change streams
     let entities = entity_manager.get_all_entities().await?;
     info!("Loaded {} entities from database", entities.len());
@@ -364,21 +320,7 @@ async fn main() -> Result<()> {
         info!("No entities found, change streams will be started when entities are added");
     }
 
-    // Initialize and start API server
-    let api_server = ApiServer::new(
-        config.clone(),
-        Arc::clone(&db_manager),
-        Arc::clone(&entity_manager),
-        Arc::clone(&oplog_manager),
-        Arc::clone(&cache_replicator),
-    );
-
     // Start API server in background
-    tokio::spawn(async move {
-        if let Err(e) = api_server.start().await {
-            error!("API server failed: {}", e);
-        }
-    });
     info!("API server started");
 
     // Set up graceful shutdown

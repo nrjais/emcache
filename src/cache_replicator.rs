@@ -6,7 +6,7 @@ use sqlx::Row;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio::time::{sleep, Duration, Instant};
+use tokio::time::{Duration, Instant, sleep};
 use tracing::{debug, error, info, warn};
 
 use crate::cache_db_manager::CacheDbManager;
@@ -14,7 +14,7 @@ use crate::config::AppConfig;
 use crate::database::DatabaseManager;
 use crate::entity_manager::EntityManager;
 use crate::job_server::Job;
-use crate::types::{Entity, EntityStatus, Operation};
+use crate::types::{Entity, Operation};
 use crate::utils::RetryExecutor;
 
 /// Cache replicator for applying oplogs to SQLite cache databases
@@ -216,30 +216,15 @@ impl CacheReplicator {
             }
 
             // Check if entity is live (only process oplogs for live entities)
-            match entity_manager.get_entity_status(&entity_name).await? {
-                Some(EntityStatus::Live) => {
-                    let processed = Self::apply_entity_oplogs(
-                        &cache_db_manager,
-                        &entity_manager,
-                        &entity_name,
-                        entity_oplogs,
-                    )
-                    .await?;
+            let processed = Self::apply_entity_oplogs(
+                &cache_db_manager,
+                &entity_manager,
+                &entity_name,
+                entity_oplogs,
+            )
+            .await?;
 
-                    total_processed += processed;
-                }
-                Some(status) => {
-                    debug!(
-                        "Skipping oplogs for entity {} with status {:?}",
-                        entity_name, status
-                    );
-                    // Max processed ID already updated above
-                }
-                None => {
-                    warn!("Unknown entity {}, skipping oplogs", entity_name);
-                    // Max processed ID already updated above
-                }
-            }
+            total_processed += processed;
         }
 
         // Update replication state

@@ -1,12 +1,12 @@
 use axum::{
+    Router,
     extract::{Query, State},
     http::StatusCode,
     response::Json,
     routing::{get, post},
-    Router,
 };
 use serde::Deserialize;
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 use sqlx::Row;
 use tracing::error;
 
@@ -36,7 +36,7 @@ async fn get_oplogs(
 
     // Add entity filter if specified
     if let Some(entity) = &params.entity {
-        conditions.push(format!("entity = '{}'", entity));
+        conditions.push(format!("entity = '{entity}'"));
     }
 
     // Add since filter if specified
@@ -51,8 +51,7 @@ async fn get_oplogs(
     }
 
     query_str.push_str(&format!(
-        " ORDER BY created_at DESC LIMIT {} OFFSET {}",
-        limit, offset
+        " ORDER BY created_at DESC LIMIT {limit} OFFSET {offset}"
     ));
 
     match sqlx::query(&query_str)
@@ -73,7 +72,6 @@ async fn get_oplogs(
                     created_at: row.get("created_at"),
                     entity: row.get("entity"),
                     data: row.get("data"),
-                    version: row.get("version"),
                 };
                 oplogs.push(oplog);
             }
@@ -127,13 +125,12 @@ async fn get_batch_oplogs(
     let entity_list = request
         .entities
         .iter()
-        .map(|e| format!("'{}'", e))
+        .map(|e| format!("'{e}'"))
         .collect::<Vec<_>>()
         .join(",");
 
     let mut query_str = format!(
-        "SELECT id, operation, doc_id, entity, data, version, created_at FROM oplog WHERE entity IN ({})",
-        entity_list
+        "SELECT id, operation, doc_id, entity, data, version, created_at FROM oplog WHERE entity IN ({entity_list})"
     );
 
     if let Some(since) = &request.since {
@@ -142,7 +139,7 @@ async fn get_batch_oplogs(
         }
     }
 
-    query_str.push_str(&format!(" ORDER BY created_at DESC LIMIT {}", limit));
+    query_str.push_str(&format!(" ORDER BY created_at DESC LIMIT {limit}"));
 
     match sqlx::query(&query_str)
         .fetch_all(state.db_manager.postgres())
@@ -164,7 +161,6 @@ async fn get_batch_oplogs(
                     created_at: row.get("created_at"),
                     entity: entity.clone(),
                     data: row.get("data"),
-                    version: row.get("version"),
                 };
 
                 oplogs_by_entity
@@ -199,8 +195,7 @@ async fn get_entity_oplogs(
     let limit = params.limit.unwrap_or(100).min(1000);
 
     let mut query_str = format!(
-        "SELECT id, operation, doc_id, entity, data, version, created_at FROM oplog WHERE entity = '{}' ",
-        entity
+        "SELECT id, operation, doc_id, entity, data, version, created_at FROM oplog WHERE entity = '{entity}' "
     );
 
     if let Some(since) = &params.since {
@@ -210,8 +205,7 @@ async fn get_entity_oplogs(
     }
 
     query_str.push_str(&format!(
-        " ORDER BY created_at DESC LIMIT {} OFFSET {}",
-        limit, offset
+        " ORDER BY created_at DESC LIMIT {limit} OFFSET {offset}"
     ));
 
     match sqlx::query(&query_str)
@@ -232,7 +226,6 @@ async fn get_entity_oplogs(
                     created_at: row.get("created_at"),
                     entity: row.get("entity"),
                     data: row.get("data"),
-                    version: row.get("version"),
                 };
                 oplogs.push(oplog);
             }
@@ -244,13 +237,11 @@ async fn get_entity_oplogs(
                         .map(|d| d.to_utc())
                         .unwrap_or_else(|_| chrono::Utc::now());
                 format!(
-                    "SELECT COUNT(*) as total FROM oplog WHERE entity = '{}' AND created_at > '{}'",
-                    entity, since_date
+                    "SELECT COUNT(*) as total FROM oplog WHERE entity = '{entity}' AND created_at > '{since_date}'"
                 )
             } else {
                 format!(
-                    "SELECT COUNT(*) as total FROM oplog WHERE entity = '{}'",
-                    entity
+                    "SELECT COUNT(*) as total FROM oplog WHERE entity = '{entity}'"
                 )
             };
 

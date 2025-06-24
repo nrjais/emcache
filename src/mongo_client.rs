@@ -1,14 +1,14 @@
 use anyhow::Result;
 use futures::TryStreamExt;
 use mongodb::{
-    bson::{doc, Bson, Document},
+    Client, Collection, Database,
+    bson::{Bson, Document, doc},
     change_stream::event::{ChangeStreamEvent, OperationType, ResumeToken},
     options::{ChangeStreamOptions, FullDocumentType},
-    Client, Collection, Database,
 };
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
-use tokio::time::{sleep, Duration};
+use tokio::sync::{RwLock, mpsc};
+use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
 
 use crate::config::AppConfig;
@@ -293,7 +293,7 @@ impl MongoClient {
                 if let Some(Bson::ObjectId(id)) = key.get("_id") {
                     id.to_hex()
                 } else if let Some(id_bson) = key.get("_id") {
-                    format!("{}", id_bson)
+                    format!("{id_bson}")
                 } else {
                     warn!("Change event missing _id in document_key");
                     return Ok(());
@@ -328,7 +328,6 @@ impl MongoClient {
             doc_id: doc_id.clone(),
             entity: entity.name.clone(),
             data,
-            version: entity.version,
             created_at: chrono::Utc::now(),
         };
 
@@ -370,10 +369,10 @@ impl MongoClient {
                 if let Ok(Bson::ObjectId(id)) = id_ref.try_into() {
                     id.to_hex()
                 } else {
-                    format!("{:?}", id_ref)
+                    format!("{id_ref:?}")
                 }
             } else {
-                format!("unknown_{}", processed_count)
+                format!("unknown_{processed_count}")
             };
 
             // Convert document to JSON
@@ -386,7 +385,6 @@ impl MongoClient {
                 doc_id,
                 entity: entity.name.clone(),
                 data,
-                version: entity.version,
                 created_at: chrono::Utc::now(),
             };
 

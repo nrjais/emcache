@@ -6,7 +6,6 @@ use tracing::{debug, error, info, warn};
 use crate::cache_db_manager::CacheDbManager;
 use crate::entity_manager::EntityManager;
 use crate::job_server::Job;
-use crate::types::EntityStatus;
 
 /// Job for cleaning up unused entity databases
 pub struct DatabaseCleanupJob {
@@ -30,7 +29,6 @@ impl DatabaseCleanupJob {
         let all_entities = self.entity_manager.get_all_entities().await?;
         let active_entities: Vec<String> = all_entities
             .into_iter()
-            .filter(|entity| entity.status == EntityStatus::Live)
             .map(|entity| entity.name)
             .collect();
 

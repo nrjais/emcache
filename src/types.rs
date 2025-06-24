@@ -60,6 +60,12 @@ pub struct Shape {
     pub columns: Vec<Column>,
 }
 
+#[derive(Debug, Clone)]
+pub struct OplogEvent {
+    pub oplog: Oplog,
+    pub data: JsonValue,
+}
+
 /// Oplog entry representing a change operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Oplog {
@@ -69,7 +75,6 @@ pub struct Oplog {
     pub created_at: DateTime<Utc>,
     pub entity: String,
     pub data: JsonValue,
-    pub version: i32,
 }
 
 /// Entity status for tracking replication state
@@ -113,10 +118,7 @@ pub struct Entity {
     pub id: i64,
     pub name: String,
     pub shape: Shape,
-    pub status: EntityStatus,
-    pub version: i32,
     pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 /// Resume token tracking for MongoDB change streams
@@ -125,7 +127,6 @@ pub struct ResumeToken {
     pub id: i64,
     pub token: String,
     pub version: i32,
-    pub status: EntityStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

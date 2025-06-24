@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO mongo_resume_tokens (entity, token_data) VALUES ($1, $2) ON CONFLICT (entity) DO UPDATE SET token_data = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "95fa88ee396f9a8710a69f27d4f04133bfc5e7c279915b613a084117dfad017b"
+}

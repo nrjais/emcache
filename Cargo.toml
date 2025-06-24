@@ -1,7 +1,7 @@
 [package]
 name = "emcachers"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 # SQLx offline mode configuration
 [package.metadata.sqlx]
@@ -13,11 +13,11 @@ anyhow = "1.0"
 # Async trait support
 async-trait = "0.1"
 # HTTP server and client
-axum = "0.7"
+axum = "0.8"
 # Date/time handling
 chrono = { version = "0.4", features = ["serde"] }
 # Configuration
-config = "0.14"
+config = "0.15"
 # Connection pooling utilities
 deadpool-postgres = "0.14"
 futures = "0.3"
@@ -40,10 +40,11 @@ tokio = { version = "1.0", features = ["full"] }
 # Async channels
 tokio-stream = "0.1"
 tokio-util = "0.7"
-tower = "0.4"
-tower-http = { version = "0.5", features = ["cors"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # UUID generation
 uuid = { version = "1.0", features = ["serde", "v4"] }
+futures-batch = "0.6"
