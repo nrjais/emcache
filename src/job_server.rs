@@ -67,11 +67,7 @@ impl JobServer {
         let jobs_map = Arc::clone(&self.jobs);
 
         // Create the job execution task
-        let task_handle = tokio::spawn(Self::run_job_loop(
-            job,
-            config.clone(),
-            cancellation_token.clone(),
-        ));
+        let task_handle = tokio::spawn(Self::run_job_loop(job, config.clone(), cancellation_token.clone()));
 
         let job_handle = JobHandle {
             config,
@@ -122,7 +118,6 @@ impl JobServer {
         info!("Job {} shutdown complete", config.name);
     }
 
-    /// Execute a job with retry logic
     async fn execute_job_with_retry<J>(job: &Arc<J>, config: &JobConfig) -> Result<()>
     where
         J: Job,
@@ -141,10 +136,7 @@ impl JobServer {
                 Err(e) => {
                     attempts += 1;
                     if attempts > config.retry_count {
-                        error!(
-                            "Job {} failed after {} attempts: {}",
-                            config.name, attempts, e
-                        );
+                        error!("Job {} failed after {} attempts: {}", config.name, attempts, e);
                         return Err(e);
                     }
 
@@ -188,7 +180,6 @@ impl JobServer {
             info!("Stopping job: {}", job_name);
             job_handle.cancellation_token.cancel();
 
-            // Wait for the job to finish
             if let Err(e) = job_handle.task_handle.await {
                 error!("Error waiting for job {} to finish: {}", job_name, e);
             }
@@ -205,10 +196,8 @@ impl JobServer {
     pub async fn shutdown(&self) -> Result<()> {
         info!("Shutting down job server");
 
-        // Signal all jobs to stop
         self.shutdown_token.cancel();
 
-        // Wait for all jobs to finish
         let mut jobs = self.jobs.write().await;
         let job_handles: Vec<_> = jobs.drain().collect();
 
@@ -221,12 +210,6 @@ impl JobServer {
 
         info!("Job server shutdown complete");
         Ok(())
-    }
-}
-
-impl Default for JobServer {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

@@ -1,8 +1,7 @@
 use anyhow::Result;
-use sqlx::Row;
 use tracing::debug;
 
-use crate::storage::postgres::PostgresClient;
+use crate::storage::PostgresClient;
 use crate::types::Oplog;
 
 /// Database operations for oplog management

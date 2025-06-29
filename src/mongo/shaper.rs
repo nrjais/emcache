@@ -50,10 +50,7 @@ pub fn map_oplog_from_change(
     }))
 }
 
-pub fn map_oplog_from_document(
-    document: bson::Document,
-    entity: &str,
-) -> anyhow::Result<OplogEvent> {
+pub fn map_oplog_from_document(document: bson::Document, entity: &str) -> anyhow::Result<OplogEvent> {
     let doc_id = document.get("_id").context("Document id is not present")?;
     let doc_id = extract_doc_id(doc_id)?;
 

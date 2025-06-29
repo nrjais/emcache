@@ -65,7 +65,8 @@ impl Default for AppConfig {
         Self {
             database: DatabaseConfig {
                 mongodb_url: "mongodb://localhost:27017/emcachers".to_string(),
-                postgres_url: "postgresql://postgres:password@postgres.emcache.orb.local:5432/emcache?sslmode=disable".to_string(),
+                postgres_url: "postgresql://postgres:password@postgres.emcache.orb.local:5432/emcache?sslmode=disable"
+                    .to_string(),
                 sqlite_base_path: "./dbs".to_string(),
             },
             jobs: JobConfig {

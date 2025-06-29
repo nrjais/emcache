@@ -1,5 +1,5 @@
 use axum::{extract::State, http::StatusCode, response::Json};
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 use std::collections::HashMap;
 // Health check endpoints - errors handled with anyhow
 
@@ -20,32 +20,6 @@ pub async fn detailed_health_check(
     let mut health_status = HashMap::new();
     let mut overall_healthy = true;
 
-    // Check PostgreSQL connection
-    match sqlx::query("SELECT 1")
-        .fetch_optional(state.db_manager.postgres())
-        .await
-    {
-        Ok(_) => {
-            health_status.insert(
-                "postgresql",
-                json!({
-                    "status": "healthy",
-                    "message": "Connection successful"
-                }),
-            );
-        }
-        Err(e) => {
-            health_status.insert(
-                "postgresql",
-                json!({
-                    "status": "unhealthy",
-                    "message": format!("Connection failed: {}", e)
-                }),
-            );
-            overall_healthy = false;
-        }
-    }
-
     // Check entity manager
     match state.entity_manager.get_all_entities().await {
         Ok(entities) => {
@@ -63,30 +37,6 @@ pub async fn detailed_health_check(
                 json!({
                     "status": "unhealthy",
                     "message": format!("Failed to get entities: {}", e)
-                }),
-            );
-            overall_healthy = false;
-        }
-    }
-
-    // Check cache replicator
-    match state.cache_replicator.get_stats().await {
-        Ok(stats) => {
-            health_status.insert(
-                "cache_replicator",
-                json!({
-                    "status": "healthy",
-                    "message": "Replication running",
-                    "stats": stats
-                }),
-            );
-        }
-        Err(e) => {
-            health_status.insert(
-                "cache_replicator",
-                json!({
-                    "status": "unhealthy",
-                    "message": format!("Failed to get stats: {}", e)
                 }),
             );
             overall_healthy = false;

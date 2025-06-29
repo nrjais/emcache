@@ -10,7 +10,7 @@ use serde_json::{Value as JsonValue, json};
 use tracing::error;
 
 use super::AppState;
-use crate::types::{Entity, EntityStatus, Shape};
+use crate::types::{Entity, Shape};
 
 /// Create entity management router
 pub fn router() -> Router<AppState> {
@@ -22,9 +22,7 @@ pub fn router() -> Router<AppState> {
 }
 
 /// Get all entities
-async fn get_entities(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<Entity>>, (StatusCode, Json<JsonValue>)> {
+async fn get_entities(State(state): State<AppState>) -> Result<Json<Vec<Entity>>, (StatusCode, Json<JsonValue>)> {
     match state.entity_manager.get_all_entities().await {
         Ok(entities) => Ok(Json(entities)),
         Err(e) => {
@@ -43,8 +41,9 @@ async fn create_entity(
     Json(request): Json<CreateEntityRequest>,
 ) -> Result<Json<Entity>, (StatusCode, Json<JsonValue>)> {
     let entity = Entity {
-        id: 0, // Will be set by database
+        id: 0,
         name: request.name.clone(),
+        source: request.source.clone(),
         shape: request.shape,
         created_at: chrono::Utc::now(),
     };
@@ -68,10 +67,7 @@ async fn get_entity(
 ) -> Result<Json<Entity>, (StatusCode, Json<JsonValue>)> {
     match state.entity_manager.get_entity(&name).await {
         Ok(Some(entity)) => Ok(Json(entity)),
-        Ok(None) => Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "Entity not found" })),
-        )),
+        Ok(None) => Err((StatusCode::NOT_FOUND, Json(json!({ "error": "Entity not found" })))),
         Err(e) => {
             error!("Failed to get entity: {}", e);
             Err((
@@ -103,20 +99,6 @@ async fn delete_entity(
 #[derive(Deserialize)]
 pub struct CreateEntityRequest {
     pub name: String,
+    pub source: String,
     pub shape: Shape,
-}
-
-#[derive(Deserialize)]
-pub struct UpdateEntityRequest {
-    pub shape: Option<Shape>,
-}
-
-#[derive(Deserialize)]
-pub struct UpdateStatusRequest {
-    pub status: EntityStatus,
-}
-
-#[derive(Deserialize)]
-pub struct BulkCreateRequest {
-    pub entities: Vec<CreateEntityRequest>,
 }

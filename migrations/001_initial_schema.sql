@@ -5,11 +5,10 @@ CREATE TABLE entities (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL UNIQUE,
     source VARCHAR(255) NOT NULL,
-    database_name VARCHAR(255) NOT NULL,
-    columns JSONB NOT NULL,
+    shape JSONB NOT NULL,
     created_at TIMESTAMP
     WITH
-        TIME ZONE DEFAULT NOW ()
+        TIME ZONE DEFAULT NOW () NOT NULL
 );
 
 -- Oplog table for main oplogs
@@ -21,7 +20,7 @@ CREATE TABLE oplog (
     data JSONB NOT NULL,
     created_at TIMESTAMP
     WITH
-        TIME ZONE DEFAULT NOW (),
+        TIME ZONE DEFAULT NOW () NOT NULL,
         CONSTRAINT oplog_operation_check CHECK (operation IN ('upsert', 'delete'))
 );
 

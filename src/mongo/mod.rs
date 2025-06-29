@@ -13,7 +13,7 @@ use mongodb::{
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use crate::{storage::postgres::PostgresClient, types::OplogEvent};
+use crate::{storage::PostgresClient, types::OplogEvent};
 
 pub struct MongoClient {
     database: Database,
@@ -47,13 +47,7 @@ impl MongoClient {
     }
 
     pub async fn start_stream(&self) -> anyhow::Result<()> {
-        let mut stream = create_change_stream(
-            &self.postgres,
-            &self.database,
-            &self.entity,
-            &self.collection,
-        )
-        .await?;
+        let mut stream = create_change_stream(&self.postgres, &self.database, &self.entity, &self.collection).await?;
 
         while let Some(event) = stream.next().await {
             if let Err(e) = self.event_channel.send(event).await {
@@ -75,12 +69,7 @@ async fn create_change_stream(
     let resume_token = resume_token.map(|token| token.token_data());
     let has_resume_token = resume_token.is_some();
 
-    let change_stream = start_stream(
-        database.collection(collection),
-        resume_token,
-        entity.to_string(),
-    )
-    .await?;
+    let change_stream = start_stream(database.collection(collection), resume_token, entity.to_string()).await?;
 
     if has_resume_token {
         Ok(change_stream.boxed())

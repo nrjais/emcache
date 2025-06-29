@@ -1,6 +1,6 @@
 use mongodb::change_stream::event::ResumeToken;
 
-use crate::storage::postgres::PostgresClient;
+use crate::storage::PostgresClient;
 
 #[derive(Debug, sqlx::FromRow)]
 pub struct CollectionResumeToken {
@@ -13,10 +13,7 @@ impl CollectionResumeToken {
     }
 }
 
-pub async fn fetch(
-    postgres: &PostgresClient,
-    entity: &str,
-) -> anyhow::Result<Option<CollectionResumeToken>> {
+pub async fn fetch(postgres: &PostgresClient, entity: &str) -> anyhow::Result<Option<CollectionResumeToken>> {
     let resume_token = sqlx::query_as!(
         CollectionResumeToken,
         "SELECT token_data FROM mongo_resume_tokens WHERE entity = $1",
@@ -28,11 +25,7 @@ pub async fn fetch(
     Ok(resume_token)
 }
 
-pub(crate) async fn save(
-    postgres: &PostgresClient,
-    entity: &str,
-    data: &serde_json::Value,
-) -> Result<(), anyhow::Error> {
+pub async fn save(postgres: &PostgresClient, entity: &str, data: &serde_json::Value) -> Result<(), anyhow::Error> {
     let _ = sqlx::query!(
         "INSERT INTO mongo_resume_tokens (entity, token_data) VALUES ($1, $2) ON CONFLICT (entity) DO UPDATE SET token_data = $2",
         entity,

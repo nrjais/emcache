@@ -67,10 +67,7 @@ impl RetryExecutor {
                         debug!("Retrying in {:?}", delay);
                         tokio::time::sleep(delay).await;
 
-                        delay = std::cmp::min(
-                            delay.mul_f64(self.config.multiplier),
-                            self.config.max_delay,
-                        );
+                        delay = std::cmp::min(delay.mul_f64(self.config.multiplier), self.config.max_delay);
                     }
                 }
             }

@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use sqlx::prelude::FromRow;
 
 /// Operation type for oplog entries
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -8,6 +9,16 @@ use serde_json::Value as JsonValue;
 pub enum Operation {
     Upsert,
     Delete,
+}
+
+impl From<String> for Operation {
+    fn from(s: String) -> Self {
+        match s.as_str() {
+            "upsert" => Operation::Upsert,
+            "delete" => Operation::Delete,
+            _ => Operation::Upsert,
+        }
+    }
 }
 
 impl std::fmt::Display for Operation {
@@ -55,8 +66,6 @@ pub struct Column {
 /// Entity shape definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Shape {
-    pub entity_name: String,
-    pub source_name: String,
     pub columns: Vec<Column>,
 }
 
@@ -67,56 +76,22 @@ pub struct OplogEvent {
 }
 
 /// Oplog entry representing a change operation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Oplog {
     pub id: i64,
     pub operation: Operation,
     pub doc_id: String,
-    pub created_at: DateTime<Utc>,
     pub entity: String,
     pub data: JsonValue,
-}
-
-/// Entity status for tracking replication state
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum EntityStatus {
-    Pending,
-    Scanning,
-    Live,
-    Error,
-}
-
-impl std::fmt::Display for EntityStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EntityStatus::Pending => write!(f, "pending"),
-            EntityStatus::Scanning => write!(f, "scanning"),
-            EntityStatus::Live => write!(f, "live"),
-            EntityStatus::Error => write!(f, "error"),
-        }
-    }
-}
-
-impl std::str::FromStr for EntityStatus {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "pending" => Ok(EntityStatus::Pending),
-            "scanning" => Ok(EntityStatus::Scanning),
-            "live" => Ok(EntityStatus::Live),
-            "error" => Ok(EntityStatus::Error),
-            _ => Err(anyhow::anyhow!("Invalid entity status: {}", s)),
-        }
-    }
+    pub created_at: DateTime<Utc>,
 }
 
 /// Entity definition stored in PostgreSQL
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Entity {
     pub id: i64,
     pub name: String,
+    pub source: String,
     pub shape: Shape,
     pub created_at: DateTime<Utc>,
 }
