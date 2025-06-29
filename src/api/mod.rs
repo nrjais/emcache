@@ -45,7 +45,7 @@ impl ApiServer {
             .merge(oplogs::router())
             .with_state(state);
 
-        let bind_addr = format!("{}:{}", self.config.api.host, self.config.api.port);
+        let bind_addr = format!("{}:{}", self.config.server.host, self.config.server.port);
         info!("Starting API server on {}", bind_addr);
 
         let listener = TcpListener::bind(&bind_addr).await?;

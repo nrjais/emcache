@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Result;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tracing::info;
@@ -14,11 +16,10 @@ impl PostgresClient {
         info!("Initializing database manager with auto migrations");
 
         let pool = PgPoolOptions::new()
-            .max_connections(config.connection_pool.postgres_max_connections)
-            .min_connections(config.connection_pool.postgres_min_connections)
-            .acquire_timeout(config.connection_timeout_duration())
-            .idle_timeout(Some(config.idle_timeout_duration()))
-            .connect(&config.database.postgres_url)
+            .max_connections(config.database.postgres.max_connections)
+            .min_connections(config.database.postgres.min_connections)
+            .acquire_timeout(Duration::from_millis(config.database.postgres.connection_timeout))
+            .connect(&config.database.postgres.uri)
             .await?;
 
         info!("PostgreSQL connection pool created");
@@ -32,9 +33,7 @@ impl PostgresClient {
     /// Run PostgreSQL migrations using SQLx auto migration
     async fn run_migrations(pool: &PgPool) -> Result<()> {
         info!("Running PostgreSQL auto migrations");
-
         sqlx::migrate!("./migrations").run(pool).await?;
-
         info!("PostgreSQL migrations completed successfully");
         Ok(())
     }

@@ -3,29 +3,20 @@ name = "emcachers"
 version = "0.1.0"
 edition = "2024"
 
-# SQLx offline mode configuration
 [package.metadata.sqlx]
 offline = true
 
 [dependencies]
-# Error handling
 anyhow = "1.0"
-# Async trait support
 async-trait = "0.1"
-# HTTP server and client
 axum = "0.8"
-# Date/time handling
 chrono = { version = "0.4", features = ["serde"] }
-# Configuration
 config = "0.15"
 dashmap = "6.1"
-# Connection pooling utilities
 deadpool-postgres = "0.14"
 futures = "0.3"
 futures-batch = "0.6"
-# Database drivers
 mongodb = "3.1"
-# Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sqlx = { version = "0.8", features = [
@@ -37,15 +28,11 @@ sqlx = { version = "0.8", features = [
   "sqlite",
 ] }
 thiserror = "2.0"
-# Async runtime
 tokio = { version = "1.0", features = ["full"] }
-# Async channels
 tokio-stream = "0.1"
 tokio-util = "0.7"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors"] }
-# Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-# UUID generation
 uuid = { version = "1.0", features = ["serde", "v4"] }
