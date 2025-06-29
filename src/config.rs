@@ -63,7 +63,7 @@ impl Default for AppConfig {
             },
             database: DatabaseConfig {
                 postgres: PostgresConfig {
-                    uri: "postgresql://emcachers:password@localhost:5432/emcachers".to_string(),
+                    uri: "postgresql://postgres:password@postgres.emcache.orb.local:5432/emcache".to_string(),
                     max_connections: 20,
                     min_connections: 5,
                     connection_timeout: 1000,
@@ -71,7 +71,7 @@ impl Default for AppConfig {
             },
             sources: SourcesConfig {
                 main: SourceConfig {
-                    uri: "mongodb://localhost:27017/test".to_string(),
+                    uri: "mongodb://mongo.emcache.orb.local:27017/test?directConnection=true".to_string(),
                 },
             },
             cache: CacheConfig {

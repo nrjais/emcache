@@ -17,8 +17,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/entities", get(get_entities))
         .route("/entities", post(create_entity))
-        .route("/entities/:name", get(get_entity))
-        .route("/entities/:name", delete(delete_entity))
+        .route("/entities/{name}", get(get_entity))
+        .route("/entities/{name}", delete(delete_entity))
 }
 
 /// Get all entities

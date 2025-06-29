@@ -22,7 +22,6 @@ pub struct ApiServer {
 }
 
 impl ApiServer {
-    /// Create a new API server
     pub fn new(config: AppConfig, entity_manager: Arc<EntityManager>, oplog_manager: Arc<OplogManager>) -> Self {
         Self {
             config,
@@ -31,7 +30,6 @@ impl ApiServer {
         }
     }
 
-    /// Start the API server
     pub async fn start(&self) -> Result<()> {
         let state = AppState {
             entity_manager: Arc::clone(&self.entity_manager),
