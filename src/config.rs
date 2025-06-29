@@ -12,7 +12,6 @@ pub struct ServerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingConfig {
     pub level: String,
-    pub format: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,7 +60,6 @@ impl Default for AppConfig {
             },
             logging: LoggingConfig {
                 level: "info".to_string(),
-                format: "pretty".to_string(),
             },
             database: DatabaseConfig {
                 postgres: PostgresConfig {
@@ -94,17 +92,5 @@ impl AppConfig {
             Ok(config) => Ok(config),
             Err(_) => Ok(AppConfig::default()),
         }
-    }
-
-    pub fn connection_timeout_duration(&self) -> Duration {
-        Duration::from_millis(self.database.postgres.connection_timeout)
-    }
-
-    pub fn mongodb_uri(&self) -> &str {
-        &self.sources.main.uri
-    }
-
-    pub fn postgres_uri(&self) -> &str {
-        &self.database.postgres.uri
     }
 }
