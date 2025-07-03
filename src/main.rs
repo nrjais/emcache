@@ -6,7 +6,7 @@ mod api;
 mod config;
 pub mod entity;
 mod init;
-mod job_server;
+mod executor;
 pub mod mongo;
 mod oplog;
 pub mod replicator;

@@ -8,7 +8,6 @@ use crate::entity::database::EntityDatabase;
 use crate::storage::PostgresClient;
 use crate::types::Entity;
 
-/// Entity manager handles entity CRUD operations and background refresh
 pub struct EntityManager {
     db: EntityDatabase,
     cache: DashMap<String, Entity>,
