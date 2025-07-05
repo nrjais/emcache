@@ -1,8 +1,6 @@
 use anyhow::Result;
-use std::sync::Arc;
 use tracing::debug;
 
-use crate::entity::EntityManager;
 use crate::storage::PostgresClient;
 use crate::types::OplogEvent;
 

@@ -74,6 +74,7 @@ impl LocalCache {
             max_processed_id = max_processed_id.max(oplog.id);
         }
 
+        self.set_last_processed_id(&mut tx, max_processed_id).await?;
         tx.commit().await?;
 
         debug!(
@@ -122,13 +123,17 @@ impl LocalCache {
         Ok(())
     }
 
-    async fn set_last_processed_id(&self, last_processed_id: i64) -> anyhow::Result<()> {
+    async fn set_last_processed_id(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        last_processed_id: i64,
+    ) -> anyhow::Result<()> {
         sqlx::query(&format!(
             "INSERT INTO {METADATA_TABLE} (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         ))
         .bind(LAST_PROCESSED_ID_KEY)
         .bind(last_processed_id)
-        .execute(&self.db)
+        .execute(&mut **tx)
         .await?;
         Ok(())
     }

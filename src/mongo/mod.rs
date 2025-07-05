@@ -11,6 +11,7 @@ use mongodb::{
     options::FullDocumentType,
 };
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::{config::AppConfig, executor::Task, storage::PostgresClient, types::OplogEvent};
@@ -113,11 +114,9 @@ impl Task for MongoClient {
         "change_stream".to_string()
     }
 
-    fn execute(&self) -> impl Future<Output = anyhow::Result<()>> + Send {
+    fn execute(&self, _cancellation_token: CancellationToken) -> impl Future<Output = anyhow::Result<()>> + Send {
         self.start_stream()
     }
 
-    fn shutdown(&self) -> impl Future<Output = anyhow::Result<()>> + Send {
-        async { Ok(()) }
-    }
+    async fn shutdown(&self) -> anyhow::Result<()> { Ok(()) }
 }

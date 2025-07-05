@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
 use crate::{
@@ -44,33 +45,47 @@ impl Replicator {
         }
     }
 
-    async fn replication_loop(&self) -> anyhow::Result<()> {
+    async fn replication_loop(&self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
         info!("Starting cache replication loop");
 
         let mut interval = tokio::time::interval(self.interval);
         let mut last_processed_id = 0;
 
         loop {
-            interval.tick().await;
-
-            let result = self.process_oplog_batch(last_processed_id).await;
-
-            match result {
-                Ok(max_processed_id) => {
-                    if max_processed_id == last_processed_id {
-                        sleep(self.interval).await;
-                    } else {
-                        debug!("Processed {} oplogs", max_processed_id - last_processed_id);
-                        last_processed_id = max_processed_id;
-                        let _ = self.update_last_processed_id(max_processed_id).await;
-                    }
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    info!("Cache replication loop received shutdown signal");
+                    break;
                 }
-                Err(e) => {
-                    error!("Failed to process oplog batch: {}", e);
-                    sleep(self.interval).await;
+                _ = interval.tick() => {
+                    self.tick(&mut last_processed_id).await?;
                 }
             }
         }
+
+        info!("Cache replication loop stopped");
+        Ok(())
+    }
+
+    async fn tick(&self, last_processed_id: &mut i64) -> anyhow::Result<()> {
+        let result = self.process_oplog_batch(*last_processed_id).await;
+
+        match result {
+            Ok(max_processed_id) => {
+                if max_processed_id == *last_processed_id {
+                    sleep(self.interval).await;
+                } else {
+                    debug!("Processed {} oplogs", max_processed_id - *last_processed_id);
+                    let _ = self.update_last_processed_id(max_processed_id).await;
+                    *last_processed_id = max_processed_id;
+                }
+            }
+            Err(e) => {
+                error!("Failed to process oplog batch: {}", e);
+                sleep(self.interval).await;
+            }
+        }
+        Ok(())
     }
 
     async fn process_oplog_batch(&self, last_processed_id: i64) -> anyhow::Result<i64> {
@@ -121,7 +136,7 @@ impl Task for Replicator {
         "replicator".to_string()
     }
 
-    fn execute(&self) -> impl Future<Output = anyhow::Result<()>> + Send {
-        self.replication_loop()
+    fn execute(&self, cancellation_token: CancellationToken) -> impl Future<Output = anyhow::Result<()>> + Send {
+        self.replication_loop(cancellation_token)
     }
 }

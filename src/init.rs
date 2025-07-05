@@ -2,13 +2,12 @@ use anyhow::Result;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
 use crate::api::ApiServer;
 use crate::config::AppConfig;
 use crate::entity::EntityManager;
-use crate::executor::{TaskServer, task_config};
+use crate::executor::TaskServer;
 use crate::mongo::MongoClient;
 use crate::oplog::OplogManager;
 use crate::replicator::Replicator;
@@ -17,6 +16,7 @@ use crate::storage::{PostgresClient, metadata_sqlite};
 
 pub struct Systems {
     pub api_server: ApiServer,
+    pub task_server: TaskServer,
 }
 
 impl Systems {
@@ -27,7 +27,7 @@ impl Systems {
 
         let entity_manager = Arc::new(EntityManager::new(postgres_client.clone()));
 
-        let (oplog_manager, oplog_sender) = OplogManager::new(conf.clone(), postgres_client.clone()).await?;
+        let (oplog_manager, oplog_sender) = OplogManager::new(postgres_client.clone()).await?;
         let mongo_client = MongoClient::new(&conf, &postgres_client, oplog_sender).await?;
 
         let meta = metadata_sqlite(&conf).await?;
@@ -42,7 +42,10 @@ impl Systems {
 
         let api_server = ApiServer::new(conf.clone(), Arc::clone(&entity_manager));
 
-        Ok(Systems { api_server })
+        Ok(Systems {
+            api_server,
+            task_server,
+        })
     }
 }
 
@@ -52,15 +55,9 @@ async fn register_tasks(
     replicator: Replicator,
     task_server: &TaskServer,
 ) -> Result<(), anyhow::Error> {
-    task_server
-        .register(mongo_client, task_config(Duration::from_secs(1)))
-        .await?;
-    task_server
-        .register(oplog_manager, task_config(Duration::from_secs(1)))
-        .await?;
-    task_server
-        .register(replicator, task_config(Duration::from_secs(1)))
-        .await?;
+    task_server.register(mongo_client).await?;
+    task_server.register(oplog_manager).await?;
+    task_server.register(replicator).await?;
     Ok(())
 }
 

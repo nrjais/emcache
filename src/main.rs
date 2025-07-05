@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Result;
 use tokio::signal;
 use tracing::{error, info};
@@ -5,14 +7,13 @@ use tracing::{error, info};
 mod api;
 mod config;
 pub mod entity;
-mod init;
 mod executor;
+mod init;
 pub mod mongo;
 mod oplog;
 pub mod replicator;
 pub mod storage;
 mod types;
-mod utils;
 
 use crate::{config::AppConfig, init::Systems};
 
@@ -34,7 +35,15 @@ async fn main() -> Result<()> {
             }
         }
         _ = shutdown_signal => {
-            info!("Graceful shutdown completed");
+            info!("Shutting down task server");
+            tokio::select! {
+                _ = systems.task_server.shutdown() => {
+                    info!("Task server shutdown completed");
+                }
+                _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                    info!("Shutting down task server timed out, force killing");
+                }
+            }
         }
     }
 
