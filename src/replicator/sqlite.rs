@@ -40,7 +40,7 @@ impl SqliteManager {
             fs::create_dir_all(parent).await?;
         }
 
-        let connection_string = format!("sqlite:{}", db_path.display());
+        let connection_string = format!("sqlite:{}?mode=rwc", db_path.display());
 
         let pool = SqlitePoolOptions::new()
             .max_connections(10)
