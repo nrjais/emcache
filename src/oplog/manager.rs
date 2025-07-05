@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use tokio::time::Duration;
@@ -21,12 +22,8 @@ pub struct OplogManager {
 }
 
 impl OplogManager {
-    pub async fn new(
-        config: AppConfig,
-        client: PostgresClient,
-        entity_manager: Arc<EntityManager>,
-    ) -> Result<(Self, mpsc::Sender<OplogEvent>)> {
-        let processor = OplogProcessor::new(client, entity_manager);
+    pub async fn new(config: AppConfig, client: PostgresClient) -> Result<(Self, mpsc::Sender<OplogEvent>)> {
+        let processor = OplogProcessor::new(client);
         let (sender, receiver) = mpsc::channel(1000); // Choose appropriate buffer size
 
         let manager = Self {
@@ -39,29 +36,29 @@ impl OplogManager {
     }
 }
 
-#[async_trait::async_trait]
 impl Task for OplogManager {
-    fn name(&self) -> &str {
-        "oplog-manager"
+    fn name(&self) -> String {
+        "oplog-manager".to_string()
     }
 
-    async fn execute(&self) -> Result<()> {
-        // Take the receiver out of the option
-        let receiver = {
-            let mut guard = self.event_receiver.lock().await;
-            guard.take()
-        };
+    fn execute(&self) -> impl Future<Output = Result<()>> + Send {
+        async move {
+            let receiver = {
+                let mut guard = self.event_receiver.lock().await;
+                guard.take()
+            };
 
-        let event_channel = receiver.expect("receiver is not initialized");
-        let mut stream = ReceiverStream::new(event_channel).chunks_timeout(100, Duration::from_secs(1));
-        while let Some(oplogs) = stream.next().await {
-            self.processor.flush_batch(oplogs).await?;
+            let event_channel = receiver.expect("receiver is not initialized");
+            let mut stream = ReceiverStream::new(event_channel).chunks_timeout(100, Duration::from_secs(1));
+            while let Some(oplogs) = stream.next().await {
+                self.processor.flush_batch(oplogs).await?;
+            }
+
+            Ok(())
         }
-
-        Ok(())
     }
 
-    async fn shutdown(&self) -> Result<()> {
-        Ok(())
+    fn shutdown(&self) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
     }
 }

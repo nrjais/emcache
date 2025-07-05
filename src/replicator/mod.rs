@@ -1,25 +1,27 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tokio::time::sleep;
 use tracing::{debug, error, info};
 
 use crate::{
+    config::AppConfig,
     entity::EntityManager,
-    replicator::{database::OplogDatabase, meta::MetadataDb, sqlite::SqliteManager},
+    executor::Task,
+    replicator::{database::OplogDatabase, metadata::MetadataDb, sqlite::SqliteManager},
     storage::PostgresClient,
     types::Oplog,
 };
 
 mod cache;
 mod database;
-mod meta;
+pub mod metadata;
 mod migrator;
 mod sqlite;
 
 pub struct Replicator {
     sqlite_manager: SqliteManager,
     database: OplogDatabase,
-    entity_manager: EntityManager,
+    entity_manager: Arc<EntityManager>,
     batch_size: i64,
     interval: Duration,
     meta: MetadataDb,
@@ -27,14 +29,14 @@ pub struct Replicator {
 
 impl Replicator {
     pub fn new(
-        base_dir: &str,
+        config: &AppConfig,
         postgres_client: PostgresClient,
-        entity_manager: EntityManager,
+        entity_manager: Arc<EntityManager>,
         meta: MetadataDb,
     ) -> Self {
         Self {
             meta,
-            sqlite_manager: SqliteManager::new(base_dir),
+            sqlite_manager: SqliteManager::new(&config.cache.base_dir),
             database: OplogDatabase::new(postgres_client),
             entity_manager,
             batch_size: 100,
@@ -42,7 +44,7 @@ impl Replicator {
         }
     }
 
-    async fn replication_loop(&self) {
+    async fn replication_loop(&self) -> anyhow::Result<()> {
         info!("Starting cache replication loop");
 
         let mut interval = tokio::time::interval(self.interval);
@@ -111,5 +113,15 @@ impl Replicator {
 
     async fn update_last_processed_id(&self, max_processed_id: i64) -> anyhow::Result<()> {
         self.meta.set_last_processed_id(max_processed_id).await
+    }
+}
+
+impl Task for Replicator {
+    fn name(&self) -> String {
+        "replicator".to_string()
+    }
+
+    fn execute(&self) -> impl Future<Output = anyhow::Result<()>> + Send {
+        self.replication_loop()
     }
 }

@@ -1,7 +1,7 @@
 mod resume_token;
 mod shaper;
 
-use std::pin::Pin;
+use std::{future::Future, pin::Pin};
 
 use futures::{Stream, StreamExt};
 use mongodb::{
@@ -13,7 +13,7 @@ use mongodb::{
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use crate::{storage::PostgresClient, types::OplogEvent};
+use crate::{config::AppConfig, executor::Task, storage::PostgresClient, types::OplogEvent};
 
 pub struct MongoClient {
     database: Database,
@@ -25,20 +25,17 @@ pub struct MongoClient {
 
 impl MongoClient {
     pub async fn new(
-        uri: &str,
-        database: &str,
-        entity: &str,
-        collection: &str,
+        config: &AppConfig,
         pg: &PostgresClient,
         event_channel: mpsc::Sender<OplogEvent>,
     ) -> anyhow::Result<Self> {
-        let client = Client::with_uri_str(uri).await?;
+        let client = Client::with_uri_str(&config.sources.main.uri).await?;
         Ok(Self {
             event_channel,
-            database: client.database(database),
+            database: client.database(&config.sources.main.database),
             postgres: pg.clone(),
-            entity: entity.to_string(),
-            collection: collection.to_string(),
+            entity: config.sources.main.entity.to_string(),
+            collection: config.sources.main.collection.to_string(),
         })
     }
 
@@ -64,7 +61,7 @@ async fn create_change_stream(
     database: &Database,
     entity: &str,
     collection: &str,
-) -> anyhow::Result<Pin<Box<dyn Stream<Item = OplogEvent>>>> {
+) -> anyhow::Result<Pin<Box<dyn Stream<Item = OplogEvent> + Send>>> {
     let resume_token = resume_token::fetch(postgres, entity).await?;
     let resume_token = resume_token.map(|token| token.token_data());
     let has_resume_token = resume_token.is_some();
@@ -83,7 +80,7 @@ async fn collection_scan(
     database: &Database,
     entity: String,
     collection: &str,
-) -> anyhow::Result<impl Stream<Item = OplogEvent> + 'static> {
+) -> anyhow::Result<impl Stream<Item = OplogEvent> + Send + 'static> {
     let cursor = database.collection(collection).find(bson::doc! {}).await?;
     let entity = entity.to_string();
     let stream = cursor
@@ -96,7 +93,7 @@ async fn start_stream(
     collection: Collection<Document>,
     resume_token: Option<ResumeToken>,
     entity: String,
-) -> anyhow::Result<impl Stream<Item = OplogEvent> + Send> {
+) -> anyhow::Result<impl Stream<Item = OplogEvent> + Send + 'static> {
     let post_image = FullDocumentType::WhenAvailable;
     let stream = collection
         .watch()
@@ -109,4 +106,18 @@ async fn start_stream(
         .filter_map(async move |oplog| oplog.ok().flatten());
 
     Ok(stream)
+}
+
+impl Task for MongoClient {
+    fn name(&self) -> String {
+        "change_stream".to_string()
+    }
+
+    fn execute(&self) -> impl Future<Output = anyhow::Result<()>> + Send {
+        self.start_stream()
+    }
+
+    fn shutdown(&self) -> impl Future<Output = anyhow::Result<()>> + Send {
+        async { Ok(()) }
+    }
 }

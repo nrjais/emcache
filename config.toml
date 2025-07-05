@@ -9,13 +9,13 @@ level = "info"
 format = "pretty"
 
 [database.postgres]
-uri = "postgresql://emcachers:password@localhost:5432/emcachers"
+uri = "postgresql://postgres:password@localhost:5432/emcache"
 max_connections = 20
 min_connections = 5
 connection_timeout = 1000
 
 [sources.main]
-uri = "mongodb://localhost:27017/test"
+uri = "mongodb://mongo.emcache.orb.local:27017/test?directConnection=true"
 
 [cache]
 base_dir = "caches"

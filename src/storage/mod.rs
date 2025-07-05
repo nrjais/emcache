@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use anyhow::Result;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use anyhow::{Context, Result};
+use sqlx::{PgPool, SqlitePool, postgres::PgPoolOptions, sqlite::SqlitePoolOptions};
 use tracing::info;
 
 use crate::config::AppConfig;
@@ -42,4 +42,13 @@ impl PostgresClient {
     pub fn postgres(&self) -> &PgPool {
         &self.pool
     }
+}
+
+pub async fn metadata_sqlite(config: &AppConfig) -> anyhow::Result<SqlitePool> {
+    let db = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(format!("sqlite:{}/metadata.db?mode=rwc", &config.cache.base_dir).as_str())
+        .await
+        .context("Failed to connect to metadata SQLite database")?;
+    Ok(db)
 }

@@ -3,27 +3,23 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tokio::time::{interval, sleep};
+use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-#[async_trait::async_trait]
-pub trait Task: Send + Sync {
-    fn name(&self) -> &str;
+pub trait Task: Sync + Send {
+    fn name(&self) -> String;
 
-    async fn execute(&self) -> Result<()>;
+    fn execute(&self) -> impl std::future::Future<Output = Result<()>> + Send;
 
-    async fn shutdown(&self) -> Result<()> {
-        Ok(())
+    fn shutdown(&self) -> impl std::future::Future<Output = Result<()>> + Send {
+        async { Ok(()) }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct TaskConfig {
-    pub name: String,
     pub interval: Duration,
-    pub retry_count: u32,
-    pub retry_backoff: Duration,
 }
 
 #[derive(Debug)]
@@ -50,8 +46,8 @@ impl TaskServer {
     where
         J: Task + 'static,
     {
-        let task_name = config.name.clone();
-        info!("Registering task: {}", task_name);
+        let task_name = task.name();
+        info!("Registering task: {}", &task_name);
 
         let task = Arc::new(task);
         let cancellation_token = self.shutdown_token.child_token();
@@ -65,7 +61,6 @@ impl TaskServer {
             task_handle,
         };
 
-        // Store the task handle
         let mut tasks = tasks_map.write().await;
         tasks.insert(task_name.clone(), task_handle);
 
@@ -80,64 +75,30 @@ impl TaskServer {
         let mut interval = interval(config.interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        info!("Starting job loop for: {}", config.name);
+        info!("Starting job loop for: {}", task.name());
 
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
-                    info!("Job {} received shutdown signal", config.name);
+                    info!("Job {} received shutdown signal", task.name());
                     break;
                 }
                 _ = interval.tick() => {
-                    debug!("Executing job: {}", config.name);
+                    debug!("Executing job: {}", task.name());
 
-                    if let Err(e) = Self::execute_task_with_retry(&task, &config).await {
-                        error!("Job {} failed after retries: {}", config.name, e);
+                    if let Err(e) = task.execute().await {
+                        error!("Job {} failed: {}", task.name(), e);
                     }
                 }
             }
         }
 
-        info!("Shutting down job: {}", config.name);
+        info!("Shutting down job: {}", task.name());
         if let Err(e) = task.shutdown().await {
-            error!("Error during job shutdown {}: {}", config.name, e);
+            error!("Error during job shutdown {}: {}", task.name(), e);
         }
 
-        info!("Job {} shutdown complete", config.name);
-    }
-
-    async fn execute_task_with_retry<J>(task: &Arc<J>, config: &TaskConfig) -> Result<()>
-    where
-        J: Task,
-    {
-        let mut attempts = 0;
-        let mut backoff = config.retry_backoff;
-
-        loop {
-            match task.execute().await {
-                Ok(()) => {
-                    if attempts > 0 {
-                        info!("Job {} succeeded after {} retries", config.name, attempts);
-                    }
-                    return Ok(());
-                }
-                Err(e) => {
-                    attempts += 1;
-                    if attempts > config.retry_count {
-                        error!("Job {} failed after {} attempts: {}", config.name, attempts, e);
-                        return Err(e);
-                    }
-
-                    warn!(
-                        "Job {} failed (attempt {}/{}): {}. Retrying in {:?}",
-                        config.name, attempts, config.retry_count, e, backoff
-                    );
-
-                    sleep(backoff).await;
-                    backoff = backoff.mul_f32(1.5).min(Duration::from_secs(300));
-                }
-            }
-        }
+        info!("Job {} shutdown complete", task.name());
     }
 
     pub async fn stop_task(&self, task_name: &str) -> Result<()> {
@@ -179,16 +140,6 @@ impl TaskServer {
     }
 }
 
-pub fn create_task_config(
-    name: impl Into<String>,
-    interval: Duration,
-    retry_count: u32,
-    retry_backoff: Duration,
-) -> TaskConfig {
-    TaskConfig {
-        name: name.into(),
-        interval,
-        retry_count,
-        retry_backoff,
-    }
+pub fn task_config(interval: Duration) -> TaskConfig {
+    TaskConfig { interval }
 }

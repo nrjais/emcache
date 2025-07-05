@@ -29,6 +29,9 @@ pub struct DatabaseConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceConfig {
     pub uri: String,
+    pub entity: String,
+    pub collection: String,
+    pub database: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +74,9 @@ impl Default for AppConfig {
             sources: SourcesConfig {
                 main: SourceConfig {
                     uri: "mongodb://mongo.emcache.orb.local:27017/test?directConnection=true".to_string(),
+                    entity: "test_entity".to_string(),
+                    collection: "test_collection".to_string(),
+                    database: "test_database".to_string(),
                 },
             },
             cache: CacheConfig {

@@ -29,7 +29,7 @@ impl OplogDatabase {
             .bind(&oplog.doc_id)
             .bind(oplog.created_at)
             .bind(&oplog.entity)
-            .bind(serde_json::to_string(&oplog.data)?)
+            .bind(&oplog.data)
             .execute(&mut *tx)
             .await?;
         }
