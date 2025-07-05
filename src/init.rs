@@ -9,7 +9,7 @@ use crate::config::AppConfig;
 use crate::entity::EntityManager;
 use crate::executor::TaskServer;
 use crate::mongo::MongoClient;
-use crate::oplog::OplogManager;
+use crate::oplog::{OplogDatabase, OplogManager};
 use crate::replicator::Replicator;
 use crate::replicator::metadata::MetadataDb;
 use crate::storage::{PostgresClient, metadata_sqlite};
@@ -26,6 +26,7 @@ impl Systems {
         let postgres_client = PostgresClient::new(conf.clone()).await?;
 
         let entity_manager = Arc::new(EntityManager::new(postgres_client.clone()));
+        let oplog_db = OplogDatabase::new(postgres_client.clone());
 
         let (oplog_manager, oplog_sender) = OplogManager::new(postgres_client.clone()).await?;
         let mongo_client = MongoClient::new(&conf, &postgres_client, oplog_sender, entity_manager.clone()).await?;
@@ -40,7 +41,7 @@ impl Systems {
 
         register_tasks(oplog_manager, mongo_client, replicator, &task_server).await?;
 
-        let api_server = ApiServer::new(conf.clone(), Arc::clone(&entity_manager));
+        let api_server = ApiServer::new(conf.clone(), Arc::clone(&entity_manager), oplog_db);
 
         Ok(Systems {
             api_server,

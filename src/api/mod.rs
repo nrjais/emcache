@@ -12,21 +12,28 @@ use tracing::info;
 
 use crate::config::AppConfig;
 use crate::entity::EntityManager;
+use crate::oplog::OplogDatabase;
 
 /// API server for EMCachers management
 pub struct ApiServer {
     config: AppConfig,
     entity_manager: Arc<EntityManager>,
+    oplog_db: OplogDatabase,
 }
 
 impl ApiServer {
-    pub fn new(config: AppConfig, entity_manager: Arc<EntityManager>) -> Self {
-        Self { config, entity_manager }
+    pub fn new(config: AppConfig, entity_manager: Arc<EntityManager>, oplog_db: OplogDatabase) -> Self {
+        Self {
+            config,
+            entity_manager,
+            oplog_db,
+        }
     }
 
     pub async fn start(&self) -> Result<()> {
         let state = AppState {
             entity_manager: Arc::clone(&self.entity_manager),
+            oplog_db: self.oplog_db.clone(),
         };
 
         let app = Router::new()
@@ -50,4 +57,5 @@ impl ApiServer {
 #[derive(Clone)]
 pub struct AppState {
     pub entity_manager: Arc<EntityManager>,
+    pub oplog_db: OplogDatabase,
 }

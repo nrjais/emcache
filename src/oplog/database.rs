@@ -38,4 +38,17 @@ impl OplogDatabase {
         debug!("Successfully inserted oplogs to main table");
         Ok(())
     }
+
+    pub async fn get_oplogs(&self, entities: &[String], from: i64, limit: i64) -> Result<Vec<Oplog>> {
+        let oplogs = sqlx::query_as!(
+            Oplog,
+            "SELECT * FROM oplog WHERE id > $1 AND entity = ANY($2) ORDER BY id ASC LIMIT $3",
+            from,
+            entities,
+            limit
+        )
+        .fetch_all(self.client.postgres())
+        .await?;
+        Ok(oplogs)
+    }
 }
