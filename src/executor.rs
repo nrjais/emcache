@@ -9,15 +9,10 @@ pub trait Task: Sync + Send {
     fn name(&self) -> String;
 
     fn execute(&self, cancellation_token: CancellationToken) -> impl Future<Output = Result<()>> + Send;
-
-    async fn shutdown(&self) -> Result<()> {
-        Ok(())
-    }
 }
 
 #[derive(Debug)]
 struct TaskHandle {
-    cancellation_token: CancellationToken,
     task_handle: tokio::task::JoinHandle<()>,
 }
 
@@ -45,12 +40,9 @@ impl TaskServer {
         let cancellation_token = self.shutdown_token.child_token();
         let tasks_map = Arc::clone(&self.tasks);
 
-        let task_handle = tokio::spawn(Self::run_task_loop(task, cancellation_token.clone()));
+        let task_handle = tokio::spawn(Self::run_task_loop(task, cancellation_token));
 
-        let task_handle = TaskHandle {
-            cancellation_token,
-            task_handle,
-        };
+        let task_handle = TaskHandle { task_handle };
 
         let mut tasks = tasks_map.write().await;
         tasks.insert(task_name.clone(), task_handle);

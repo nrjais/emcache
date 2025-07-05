@@ -28,7 +28,7 @@ impl Systems {
         let entity_manager = Arc::new(EntityManager::new(postgres_client.clone()));
 
         let (oplog_manager, oplog_sender) = OplogManager::new(postgres_client.clone()).await?;
-        let mongo_client = MongoClient::new(&conf, &postgres_client, oplog_sender).await?;
+        let mongo_client = MongoClient::new(&conf, &postgres_client, oplog_sender, entity_manager.clone()).await?;
 
         let meta = metadata_sqlite(&conf).await?;
         let metadata_db = MetadataDb::new(meta.clone());

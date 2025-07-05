@@ -3,6 +3,7 @@ mod database;
 use std::collections::HashSet;
 
 use dashmap::DashMap;
+use tokio::sync::broadcast;
 
 use crate::entity::database::EntityDatabase;
 use crate::storage::PostgresClient;
@@ -11,13 +12,16 @@ use crate::types::Entity;
 pub struct EntityManager {
     db: EntityDatabase,
     cache: DashMap<String, Entity>,
+    broadcast_tx: broadcast::Sender<()>,
 }
 
 impl EntityManager {
     pub fn new(db: PostgresClient) -> Self {
+        let (tx, _) = broadcast::channel(1);
         Self {
             db: EntityDatabase::new(db),
             cache: DashMap::new(),
+            broadcast_tx: tx,
         }
     }
 
@@ -38,31 +42,30 @@ impl EntityManager {
         for entity in &entities {
             self.cache.insert(entity.name.clone(), entity.clone());
         }
+        let _ = self.broadcast_tx.send(());
+
         Ok(entities)
     }
 
     pub async fn create_entity(&self, entity: Entity) -> anyhow::Result<Entity> {
         let entity = self.db.create_entity(entity).await?;
-        self.cache.insert(entity.name.clone(), entity.clone());
+        self.refresh_entities().await?;
         Ok(entity)
     }
 
     pub async fn get_entity(&self, name: &str) -> anyhow::Result<Option<Entity>> {
         let entity = self.cache.get(name).map(|e| e.value().clone());
-        if let Some(entity) = entity {
-            Ok(Some(entity))
-        } else {
-            let entity = self.db.get_entity(name).await?;
-            if let Some(entity) = &entity {
-                self.cache.insert(entity.name.clone(), entity.clone());
-            }
-            Ok(entity)
-        }
+        Ok(entity)
     }
 
     pub async fn delete_entity(&self, name: &str) -> anyhow::Result<()> {
         self.db.delete_entity(name).await?;
         self.cache.remove(name);
+        self.refresh_entities().await?;
         Ok(())
+    }
+
+    pub fn broadcast(&self) -> broadcast::Receiver<()> {
+        self.broadcast_tx.subscribe()
     }
 }

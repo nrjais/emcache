@@ -51,6 +51,4 @@ impl Task for OplogManager {
 
         Ok(())
     }
-
-    async fn shutdown(&self) -> Result<()> { Ok(()) }
 }

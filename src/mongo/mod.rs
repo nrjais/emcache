@@ -1,8 +1,9 @@
 mod resume_token;
 mod shaper;
 
-use std::{future::Future, pin::Pin};
+use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
 
+use anyhow::Context;
 use futures::{Stream, StreamExt};
 use mongodb::{
     Client, Collection, Database,
@@ -10,18 +11,30 @@ use mongodb::{
     change_stream::event::ResumeToken,
     options::FullDocumentType,
 };
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, task::JoinHandle, time::timeout};
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{debug, error, info, warn};
 
-use crate::{config::AppConfig, executor::Task, storage::PostgresClient, types::OplogEvent};
+use crate::{
+    config::AppConfig,
+    entity::EntityManager,
+    executor::Task,
+    storage::PostgresClient,
+    types::{Entity, OplogEvent},
+};
+
+#[derive(Debug)]
+struct ActiveStream {
+    cancel_token: CancellationToken,
+    handle: JoinHandle<anyhow::Result<()>>,
+}
 
 pub struct MongoClient {
-    database: Database,
     postgres: PostgresClient,
-    entity: String,
-    collection: String,
+    sources: HashMap<String, Database>,
     event_channel: mpsc::Sender<OplogEvent>,
+    entity_manager: Arc<EntityManager>,
+    active_streams: Arc<tokio::sync::Mutex<HashMap<String, ActiveStream>>>,
 }
 
 impl MongoClient {
@@ -29,31 +42,173 @@ impl MongoClient {
         config: &AppConfig,
         pg: &PostgresClient,
         event_channel: mpsc::Sender<OplogEvent>,
+        entity_manager: Arc<EntityManager>,
     ) -> anyhow::Result<Self> {
-        let client = Client::with_uri_str(&config.sources.main.uri).await?;
+        let sources = Self::init_sources(config).await?;
         Ok(Self {
             event_channel,
-            database: client.database(&config.sources.main.database),
+            sources,
             postgres: pg.clone(),
-            entity: config.sources.main.entity.to_string(),
-            collection: config.sources.main.collection.to_string(),
+            entity_manager,
+            active_streams: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         })
     }
 
-    pub async fn checkpoint_oplog(&self, oplog: &OplogEvent) -> anyhow::Result<()> {
-        resume_token::save(&self.postgres, &self.entity, &oplog.data).await
+    async fn init_sources(config: &AppConfig) -> anyhow::Result<HashMap<String, Database>> {
+        let mut sources = HashMap::new();
+        for (name, source) in &config.sources {
+            let client = Client::with_uri_str(&source.uri).await?;
+            sources.insert(name.clone(), client.database(name));
+        }
+        Ok(sources)
     }
 
-    pub async fn start_stream(&self) -> anyhow::Result<()> {
-        let mut stream = create_change_stream(&self.postgres, &self.database, &self.entity, &self.collection).await?;
+    pub async fn checkpoint_oplog(&self, oplog: &OplogEvent) -> anyhow::Result<()> {
+        resume_token::save(&self.postgres, &oplog.oplog.entity, &oplog.data).await
+    }
 
-        while let Some(event) = stream.next().await {
-            if let Err(e) = self.event_channel.send(event).await {
-                warn!("Failed to send event: {}", e);
+    async fn monitor_entities(&self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
+        info!("Starting entity monitor for MongoDB change streams");
+
+        let mut broadcast_rx = self.entity_manager.broadcast();
+
+        loop {
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    info!("Entity monitor received shutdown signal");
+                    break;
+                }
+                _ = broadcast_rx.recv() => {
+                    if let Err(e) = self.sync_streams().await {
+                        error!("Failed to sync streams: {}", e);
+                    }
+                }
+            }
+        }
+
+        self.stop_all_streams().await;
+
+        info!("Entity monitor stopped");
+        Ok(())
+    }
+
+    async fn sync_streams(&self) -> anyhow::Result<()> {
+        let entities = self.entity_manager.refresh_entities().await?;
+        debug!("Refreshed {} entities", entities.len());
+
+        let mut active_streams = self.active_streams.lock().await;
+        let current_entity_names: std::collections::HashSet<String> = entities.iter().map(|e| e.name.clone()).collect();
+
+        let mut to_remove = Vec::new();
+        for (entity_name, active_stream) in active_streams.iter() {
+            if !current_entity_names.contains(entity_name) {
+                info!("Stopping stream for removed entity: {}", entity_name);
+                active_stream.cancel_token.cancel();
+                to_remove.push(entity_name.clone());
+            }
+        }
+
+        for entity_name in to_remove {
+            if let Some(stream) = active_streams.remove(&entity_name) {
+                let _ = timeout(Duration::from_secs(5), stream.handle).await;
+            }
+        }
+
+        for entity in entities {
+            if !active_streams.contains_key(&entity.name) {
+                match self.start_entity_stream(&entity).await {
+                    Ok(active_stream) => {
+                        info!("Started stream for entity: {}", entity.name);
+                        active_streams.insert(entity.name.clone(), active_stream);
+                    }
+                    Err(e) => {
+                        error!("Failed to start stream for entity {}: {}", entity.name, e);
+                    }
+                }
             }
         }
 
         Ok(())
+    }
+
+    async fn start_entity_stream(&self, entity: &Entity) -> anyhow::Result<ActiveStream> {
+        let cancel_token = CancellationToken::new();
+        let cancel_token_clone = cancel_token.clone();
+
+        let entity_clone = entity.clone();
+        let event_channel = self.event_channel.clone();
+        let postgres = self.postgres.clone();
+        let sources = self.sources.clone();
+
+        let source_db = sources
+            .get(&entity.source)
+            .with_context(|| format!("Source '{}' not found for entity '{}'", entity.source, entity.name))?
+            .clone();
+
+        let handle = tokio::spawn(async move {
+            Self::stream_entity_changes(postgres, source_db, event_channel, entity_clone, cancel_token_clone).await
+        });
+
+        Ok(ActiveStream { cancel_token, handle })
+    }
+
+    async fn stream_entity_changes(
+        postgres: PostgresClient,
+        source_db: Database,
+        event_channel: mpsc::Sender<OplogEvent>,
+        entity: Entity,
+        cancellation_token: CancellationToken,
+    ) -> anyhow::Result<()> {
+        info!(
+            "Starting change stream for entity: {} (source: {})",
+            entity.name, entity.source
+        );
+
+        let mut stream = create_change_stream(&postgres, &source_db, &entity.name, &entity.name).await?;
+        loop {
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    info!("Change stream for entity '{}' received shutdown signal", entity.name);
+                    break;
+                }
+                event = stream.next() => {
+                    match event {
+                        Some(oplog_event) => {
+                            if let Err(e) = event_channel.send(oplog_event).await {
+                                warn!("Failed to send event for entity '{}': {}", entity.name, e);
+                                break;
+                            }
+                        }
+                        None => {
+                            warn!("Change stream for entity '{}' ended unexpectedly", entity.name);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        info!("Change stream for entity '{}' stopped", entity.name);
+        Ok(())
+    }
+
+    async fn stop_all_streams(&self) {
+        let mut active_streams = self.active_streams.lock().await;
+
+        info!("Stopping {} active streams", active_streams.len());
+
+        for (entity_name, active_stream) in active_streams.iter() {
+            info!("Stopping stream for entity: {}", entity_name);
+            active_stream.cancel_token.cancel();
+        }
+
+        let handles: Vec<_> = active_streams.drain().map(|(_, stream)| stream.handle).collect();
+
+        for handle in handles {
+            let _ = timeout(Duration::from_secs(5), handle).await;
+        }
+
+        info!("All streams stopped");
     }
 }
 
@@ -114,9 +269,7 @@ impl Task for MongoClient {
         "change_stream".to_string()
     }
 
-    fn execute(&self, _cancellation_token: CancellationToken) -> impl Future<Output = anyhow::Result<()>> + Send {
-        self.start_stream()
+    fn execute(&self, cancellation_token: CancellationToken) -> impl Future<Output = anyhow::Result<()>> + Send {
+        self.monitor_entities(cancellation_token)
     }
-
-    async fn shutdown(&self) -> anyhow::Result<()> { Ok(()) }
 }

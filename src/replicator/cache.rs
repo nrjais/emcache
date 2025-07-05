@@ -137,8 +137,4 @@ impl LocalCache {
         .await?;
         Ok(())
     }
-
-    pub fn get_last_processed_id(&self) -> i64 {
-        self.last_processed_id.load(Ordering::Relaxed)
-    }
 }

@@ -63,6 +63,7 @@ impl Replicator {
             }
         }
 
+        self.sqlite_manager.shutdown().await?;
         info!("Cache replication loop stopped");
         Ok(())
     }

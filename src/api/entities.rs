@@ -42,8 +42,8 @@ async fn create_entity(
 ) -> Result<Json<Entity>, (StatusCode, Json<JsonValue>)> {
     let entity = Entity {
         id: 0,
-        name: request.name.clone(),
-        source: request.source.clone(),
+        name: request.name,
+        source: request.source,
         shape: request.shape,
         created_at: chrono::Utc::now(),
     };

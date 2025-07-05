@@ -14,33 +14,6 @@ impl EntityDatabase {
         Self { db }
     }
 
-    pub async fn get_entity(&self, name: &str) -> anyhow::Result<Option<Entity>> {
-        debug!("Getting entity: {}", name);
-
-        let result = sqlx::query!(
-            "SELECT id, name, source, shape, created_at
-             FROM entities WHERE name = $1",
-            name
-        )
-        .fetch_optional(self.db.postgres())
-        .await?;
-
-        match result {
-            Some(row) => {
-                let shape: Shape = serde_json::from_value(row.shape)?;
-                Ok(Some(Entity {
-                    id: row.id as i64,
-                    name: row.name,
-                    source: row.source,
-                    shape,
-                    created_at: row.created_at,
-                }))
-            }
-            None => Ok(None),
-        }
-    }
-
-    /// Get all entities
     pub async fn get_all_entities(&self) -> anyhow::Result<Vec<Entity>> {
         debug!("Getting all entities");
 
