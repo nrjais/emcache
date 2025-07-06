@@ -43,6 +43,7 @@ async fn create_entity(
     let entity = Entity {
         id: 0,
         name: request.name,
+        client: request.client,
         source: request.source,
         shape: request.shape,
         created_at: chrono::Utc::now(),
@@ -65,16 +66,9 @@ async fn get_entity(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<Entity>, (StatusCode, Json<JsonValue>)> {
-    match state.entity_manager.get_entity(&name).await {
-        Ok(Some(entity)) => Ok(Json(entity)),
-        Ok(None) => Err((StatusCode::NOT_FOUND, Json(json!({ "error": "Entity not found" })))),
-        Err(e) => {
-            error!("Failed to get entity: {}", e);
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Failed to get entity" })),
-            ))
-        }
+    match state.entity_manager.get_entity(&name) {
+        Some(entity) => Ok(Json(entity)),
+        None => Err((StatusCode::NOT_FOUND, Json(json!({ "error": "Entity not found" })))),
     }
 }
 
@@ -99,6 +93,7 @@ async fn delete_entity(
 #[derive(Deserialize)]
 pub struct CreateEntityRequest {
     pub name: String,
+    pub client: String,
     pub source: String,
     pub shape: Shape,
 }

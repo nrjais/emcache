@@ -117,7 +117,7 @@ impl Replicator {
     }
 
     async fn apply_entity_oplogs(&self, entity_name: &str, oplogs: Vec<Oplog>) -> anyhow::Result<()> {
-        let entity = self.entity_manager.get_entity(entity_name).await?;
+        let entity = self.entity_manager.get_entity(entity_name);
         if let Some(entity) = entity {
             let cache = self.sqlite_manager.get_or_create_cache(&entity).await?;
             cache.apply_oplogs(oplogs).await?;

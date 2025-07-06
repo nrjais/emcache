@@ -4,6 +4,7 @@
 CREATE TABLE entities (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL UNIQUE,
+    client VARCHAR(255) NOT NULL,
     source VARCHAR(255) NOT NULL,
     shape JSONB NOT NULL,
     created_at TIMESTAMP
@@ -29,9 +30,6 @@ CREATE TABLE mongo_resume_tokens (
     entity VARCHAR(255) NOT NULL PRIMARY KEY,
     token_data JSONB NOT NULL
 );
-
--- Entities indexes
-CREATE INDEX idx_entities_name ON entities (name);
 
 -- Oplog indexes
 CREATE INDEX idx_oplog_entity_id ON oplog (entity, id);

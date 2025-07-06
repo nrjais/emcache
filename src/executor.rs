@@ -80,3 +80,16 @@ impl TaskServer {
         Ok(())
     }
 }
+
+impl<T> Task for Arc<T>
+where
+    T: Task + 'static,
+{
+    fn name(&self) -> String {
+        self.as_ref().name()
+    }
+
+    fn execute(&self, cancellation_token: CancellationToken) -> impl Future<Output = Result<()>> + Send {
+        self.as_ref().execute(cancellation_token)
+    }
+}

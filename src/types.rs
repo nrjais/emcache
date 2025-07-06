@@ -44,22 +44,23 @@ impl std::str::FromStr for Operation {
 
 /// Data type for entity columns
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "UPPERCASE")]
+#[serde(rename_all = "lowercase")]
 pub enum DataType {
-    #[serde(rename = "JSONB")]
-    JsonB,
+    Jsonb,
     Any,
     Bool,
     Number,
     Integer,
-    Text,
+    String,
+    Bytes,
 }
 
 /// Column definition for entity shapes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Column {
     pub name: String,
-    pub r#type: DataType,
+    #[serde(rename = "type")]
+    pub typ: DataType,
     pub path: String,
 }
 
@@ -69,9 +70,16 @@ pub struct Shape {
     pub columns: Vec<Column>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum OplogFrom {
+    Live,
+    Scan,
+}
+
 #[derive(Debug, Clone)]
 pub struct OplogEvent {
     pub oplog: Oplog,
+    pub from: OplogFrom,
     pub data: JsonValue,
 }
 
@@ -91,6 +99,7 @@ pub struct Oplog {
 pub struct Entity {
     pub id: i64,
     pub name: String,
+    pub client: String,
     pub source: String,
     pub shape: Shape,
     pub created_at: DateTime<Utc>,

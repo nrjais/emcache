@@ -1,7 +1,13 @@
 mod resume_token;
 mod shaper;
 
-use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::Context;
 use futures::{Stream, StreamExt};
@@ -58,7 +64,7 @@ impl MongoClient {
         let mut sources = HashMap::new();
         for (name, source) in &config.sources {
             let client = Client::with_uri_str(&source.uri).await?;
-            sources.insert(name.clone(), client.database(name));
+            sources.insert(name.clone(), client.database(&source.database));
         }
         Ok(sources)
     }
@@ -97,7 +103,7 @@ impl MongoClient {
         debug!("Refreshed {} entities", entities.len());
 
         let mut active_streams = self.active_streams.lock().await;
-        let current_entity_names: std::collections::HashSet<String> = entities.iter().map(|e| e.name.clone()).collect();
+        let current_entity_names: HashSet<String> = entities.iter().map(|e| e.name.clone()).collect();
 
         let mut to_remove = Vec::new();
         for (entity_name, active_stream) in active_streams.iter() {
@@ -141,8 +147,8 @@ impl MongoClient {
         let sources = self.sources.clone();
 
         let source_db = sources
-            .get(&entity.source)
-            .with_context(|| format!("Source '{}' not found for entity '{}'", entity.source, entity.name))?
+            .get(&entity.client)
+            .with_context(|| format!("Database '{}' not found for entity '{}'", entity.client, entity.name))?
             .clone();
 
         let handle = tokio::spawn(async move {
@@ -164,7 +170,7 @@ impl MongoClient {
             entity.name, entity.source
         );
 
-        let mut stream = create_change_stream(&postgres, &source_db, &entity.name, &entity.name).await?;
+        let mut stream = create_change_stream(&postgres, &source_db, &entity.name, &entity.source).await?;
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -225,8 +231,10 @@ async fn create_change_stream(
     let change_stream = start_stream(database.collection(collection), resume_token, entity.to_string()).await?;
 
     if has_resume_token {
+        info!("Starting change stream for entity '{}' with resume token", entity);
         Ok(change_stream.boxed())
     } else {
+        info!("Starting change stream for entity '{}' without resume token", entity);
         let scan_stream = collection_scan(database, entity.to_string(), collection).await?;
         Ok(scan_stream.chain(change_stream).boxed())
     }
@@ -239,6 +247,7 @@ async fn collection_scan(
 ) -> anyhow::Result<impl Stream<Item = OplogEvent> + Send + 'static> {
     let cursor = database.collection(collection).find(bson::doc! {}).await?;
     let entity = entity.to_string();
+    info!("Starting collection scan for entity '{}'", entity);
     let stream = cursor
         .map(move |change| shaper::map_oplog_from_document(change.unwrap(), &entity))
         .filter_map(async move |oplog| oplog.ok());
@@ -256,6 +265,8 @@ async fn start_stream(
         .full_document(post_image)
         .resume_after(resume_token)
         .await?;
+
+    info!("Started change stream for entity '{}'", entity);
 
     let stream = stream
         .map(move |change| shaper::map_oplog_from_change(change.unwrap(), &entity))

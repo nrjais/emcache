@@ -1,11 +1,16 @@
 mod database;
 
 use std::collections::HashSet;
+use std::time::Duration;
 
 use dashmap::DashMap;
 use tokio::sync::broadcast;
+use tokio::time::{MissedTickBehavior, interval};
+use tokio_util::sync::CancellationToken;
+use tracing::error;
 
 use crate::entity::database::EntityDatabase;
+use crate::executor::Task;
 use crate::storage::PostgresClient;
 use crate::types::Entity;
 
@@ -53,9 +58,8 @@ impl EntityManager {
         Ok(entity)
     }
 
-    pub async fn get_entity(&self, name: &str) -> anyhow::Result<Option<Entity>> {
-        let entity = self.cache.get(name).map(|e| e.value().clone());
-        Ok(entity)
+    pub fn get_entity(&self, name: &str) -> Option<Entity> {
+        self.cache.get(name).map(|e| e.value().clone())
     }
 
     pub async fn delete_entity(&self, name: &str) -> anyhow::Result<()> {
@@ -67,5 +71,34 @@ impl EntityManager {
 
     pub fn broadcast(&self) -> broadcast::Receiver<()> {
         self.broadcast_tx.subscribe()
+    }
+
+    async fn refresh_loop(&self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
+        let mut interval = interval(Duration::from_secs(10));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        loop {
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    break;
+                }
+                _ = interval.tick() => {
+                    if let Err(e) = self.refresh_entities().await {
+                        error!("Failed to refresh entities: {}", e);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Task for EntityManager {
+    fn name(&self) -> String {
+        "entity_manager".to_string()
+    }
+
+    fn execute(&self, cancellation_token: CancellationToken) -> impl Future<Output = anyhow::Result<()>> + Send {
+        self.refresh_loop(cancellation_token)
     }
 }

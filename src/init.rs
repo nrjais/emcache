@@ -39,9 +39,9 @@ impl Systems {
 
         let task_server = TaskServer::new();
 
-        register_tasks(oplog_manager, mongo_client, replicator, &task_server).await?;
+        register_tasks(oplog_manager, mongo_client, replicator, &entity_manager, &task_server).await?;
 
-        let api_server = ApiServer::new(conf.clone(), Arc::clone(&entity_manager), oplog_db);
+        let api_server = ApiServer::new(conf.clone(), entity_manager, oplog_db);
 
         Ok(Systems {
             api_server,
@@ -54,11 +54,13 @@ async fn register_tasks(
     oplog_manager: OplogManager,
     mongo_client: MongoClient,
     replicator: Replicator,
+    entity_manager: &Arc<EntityManager>,
     task_server: &TaskServer,
 ) -> Result<(), anyhow::Error> {
     task_server.register(mongo_client).await?;
     task_server.register(oplog_manager).await?;
     task_server.register(replicator).await?;
+    task_server.register(Arc::clone(entity_manager)).await?;
     Ok(())
 }
 

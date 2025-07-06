@@ -6,7 +6,7 @@ use mongodb::{
 use serde_json::Value;
 use tracing::debug;
 
-use crate::types::{Operation, Oplog, OplogEvent};
+use crate::types::{Operation, Oplog, OplogEvent, OplogFrom};
 
 pub fn map_oplog_from_change(
     event: ChangeStreamEvent<bson::Document>,
@@ -46,6 +46,7 @@ pub fn map_oplog_from_change(
             data,
             created_at: chrono::Utc::now(),
         },
+        from: OplogFrom::Live,
         data: resume_token,
     }))
 }
@@ -65,6 +66,7 @@ pub fn map_oplog_from_document(document: bson::Document, entity: &str) -> anyhow
             data,
             created_at: chrono::Utc::now(),
         },
+        from: OplogFrom::Scan,
         data: Value::Null,
     })
 }

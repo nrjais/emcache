@@ -17,7 +17,7 @@ impl EntityDatabase {
     pub async fn get_all_entities(&self) -> anyhow::Result<Vec<Entity>> {
         debug!("Getting all entities");
 
-        let rows = sqlx::query!("SELECT id, name, source, shape, created_at FROM entities",)
+        let rows = sqlx::query!("SELECT id, name, client, source, shape, created_at FROM entities")
             .fetch_all(self.db.postgres())
             .await?;
 
@@ -27,6 +27,7 @@ impl EntityDatabase {
             entities.push(Entity {
                 id: row.id as i64,
                 name: row.name,
+                client: row.client,
                 source: row.source,
                 shape,
                 created_at: row.created_at,
@@ -45,11 +46,12 @@ impl EntityDatabase {
 
         let row = sqlx::query_scalar!(
             r#"
-            INSERT INTO entities (name, source, shape, created_at)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO entities (name, client, source, shape, created_at)
+            VALUES ($1, $2, $3, $4, $5)
             RETURNING id
             "#,
             &entity.name,
+            &entity.client,
             &entity.source,
             &shape_json,
             &entity.created_at
