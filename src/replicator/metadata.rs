@@ -22,12 +22,11 @@ impl MetadataDb {
     }
 
     pub async fn set_last_processed_id(&self, last_processed_id: i64) -> anyhow::Result<()> {
-        sqlx::query(
-            &format!(
-                "INSERT INTO {META_TABLE_NAME} (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-            ),
-        )
+        sqlx::query(&format!(
+            "INSERT INTO {META_TABLE_NAME} (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?"
+        ))
         .bind(LAST_PROCESSED_ID)
+        .bind(last_processed_id)
         .bind(last_processed_id)
         .execute(&self.db)
         .await?;

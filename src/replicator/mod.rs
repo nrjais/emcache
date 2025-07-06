@@ -71,21 +71,27 @@ impl Replicator {
     async fn tick(&self, last_processed_id: &mut i64) -> anyhow::Result<()> {
         let result = self.process_oplog_batch(*last_processed_id).await;
 
-        match result {
-            Ok(max_processed_id) => {
-                if max_processed_id == *last_processed_id {
-                    sleep(self.interval).await;
-                } else {
-                    debug!("Processed {} oplogs", max_processed_id - *last_processed_id);
-                    let _ = self.update_last_processed_id(max_processed_id).await;
-                    *last_processed_id = max_processed_id;
-                }
-            }
-            Err(e) => {
-                error!("Failed to process oplog batch: {}", e);
-                sleep(self.interval).await;
-            }
+        let Ok(max_processed_id) = result else {
+            error!("Failed to process oplog batch");
+            sleep(self.interval).await;
+            return Ok(());
+        };
+
+        let max_processed_id = max_processed_id.max(*last_processed_id);
+        let count = max_processed_id - *last_processed_id;
+
+        if count > 0 {
+            info!("Processed {} oplogs, last processed id: {}", count, max_processed_id);
+            let _ = self.update_last_processed_id(max_processed_id).await;
+            *last_processed_id = max_processed_id;
+        } else {
+            info!(
+                "No new oplogs to process, sleeping for {} seconds",
+                self.interval.as_secs()
+            );
+            sleep(self.interval).await;
         }
+
         Ok(())
     }
 
@@ -93,7 +99,7 @@ impl Replicator {
         let oplogs = self.database.get_oplogs(last_processed_id, self.batch_size).await?;
 
         if oplogs.is_empty() {
-            return Ok(0);
+            return Ok(last_processed_id);
         }
 
         debug!("Fetched {} oplogs to process", oplogs.len());

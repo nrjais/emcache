@@ -30,6 +30,11 @@ impl EntityManager {
         }
     }
 
+    pub async fn init(&self) -> anyhow::Result<()> {
+        self.refresh_entities().await?;
+        Ok(())
+    }
+
     pub async fn get_all_entities(&self) -> anyhow::Result<Vec<Entity>> {
         let mut entities = vec![];
         for entity in self.cache.iter() {

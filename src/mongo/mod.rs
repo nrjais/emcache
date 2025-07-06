@@ -259,7 +259,7 @@ async fn start_stream(
     resume_token: Option<ResumeToken>,
     entity: String,
 ) -> anyhow::Result<impl Stream<Item = OplogEvent> + Send + 'static> {
-    let post_image = FullDocumentType::WhenAvailable;
+    let post_image = FullDocumentType::UpdateLookup;
     let stream = collection
         .watch()
         .full_document(post_image)

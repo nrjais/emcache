@@ -33,6 +33,8 @@ impl Systems {
 
         let meta = metadata_sqlite(&conf).await?;
         let metadata_db = MetadataDb::new(meta.clone());
+
+        entity_manager.init().await?;
         metadata_db.init().await?;
 
         let replicator = Replicator::new(&conf, postgres_client.clone(), entity_manager.clone(), metadata_db);
