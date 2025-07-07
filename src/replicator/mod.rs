@@ -5,7 +5,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
 use crate::{
-    config::AppConfig,
     entity::EntityManager,
     executor::Task,
     replicator::{database::OplogDatabase, metadata::MetadataDb, sqlite::SqliteManager},
@@ -17,10 +16,10 @@ mod cache;
 mod database;
 pub mod metadata;
 mod migrator;
-mod sqlite;
+pub mod sqlite;
 
 pub struct Replicator {
-    sqlite_manager: SqliteManager,
+    sqlite_manager: Arc<SqliteManager>,
     database: OplogDatabase,
     entity_manager: Arc<EntityManager>,
     batch_size: i64,
@@ -30,14 +29,14 @@ pub struct Replicator {
 
 impl Replicator {
     pub fn new(
-        config: &AppConfig,
         postgres_client: PostgresClient,
         entity_manager: Arc<EntityManager>,
         meta: MetadataDb,
+        sqlite_manager: Arc<SqliteManager>,
     ) -> Self {
         Self {
             meta,
-            sqlite_manager: SqliteManager::new(&config.cache.base_dir),
+            sqlite_manager,
             database: OplogDatabase::new(postgres_client),
             entity_manager,
             batch_size: 100,

@@ -57,7 +57,7 @@ impl SqliteManager {
     fn get_db_path(&self, entity: &Entity) -> anyhow::Result<std::path::PathBuf> {
         let mut path = self.base_dir.clone();
         path.push(entity.name.clone());
-        path.push("cache.sqlite");
+        path.push("cache.db");
 
         Ok(path)
     }
@@ -76,6 +76,12 @@ impl SqliteManager {
             info!("Deleted cache database directory: {}", entity_dir.display());
         }
 
+        Ok(())
+    }
+
+    pub async fn snapshot_to(&self, entity: &Entity, snapshot_path: &Path) -> anyhow::Result<()> {
+        let cache = self.get_or_create_cache(entity).await?;
+        cache.snapshot_to(snapshot_path).await?;
         Ok(())
     }
 

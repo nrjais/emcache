@@ -13,6 +13,7 @@ use crate::mongo::{MongoClient, ResumeTokenManager};
 use crate::oplog::{OplogDatabase, OplogManager};
 use crate::replicator::Replicator;
 use crate::replicator::metadata::MetadataDb;
+use crate::replicator::sqlite::SqliteManager;
 use crate::storage::{PostgresClient, metadata_sqlite};
 
 pub struct Systems {
@@ -33,6 +34,7 @@ impl Systems {
 
         let (oplog_manager, oplog_sender) = OplogManager::new(postgres_client.clone(), oplog_ack_sender).await?;
         let resume_token_manager = Arc::new(ResumeTokenManager::new(postgres_client.clone(), oplog_ack_receiver));
+        let sqlite_manager = Arc::new(SqliteManager::new(&conf.cache.base_dir));
 
         let mongo_client = MongoClient::new(
             &conf,
@@ -48,7 +50,12 @@ impl Systems {
         entity_manager.init().await?;
         metadata_db.init().await?;
 
-        let replicator = Replicator::new(&conf, postgres_client.clone(), entity_manager.clone(), metadata_db);
+        let replicator = Replicator::new(
+            postgres_client.clone(),
+            entity_manager.clone(),
+            metadata_db,
+            sqlite_manager.clone(),
+        );
 
         let task_server = TaskServer::new();
 

@@ -14,6 +14,7 @@ mod oplog;
 pub mod replicator;
 pub mod storage;
 mod types;
+mod snapshot;
 
 use crate::{config::AppConfig, init::Systems};
 

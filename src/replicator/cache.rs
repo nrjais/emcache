@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicI64, Ordering},
+use std::{
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+    },
 };
 
 use sqlx::SqlitePool;
@@ -135,6 +138,21 @@ impl LocalCache {
         .bind(last_processed_id)
         .execute(&mut **tx)
         .await?;
+        Ok(())
+    }
+
+    pub async fn snapshot_to(&self, snapshot_path: &Path) -> anyhow::Result<()> {
+        let vacuum_query = format!("VACUUM INTO ?1");
+        sqlx::query(&vacuum_query)
+            .bind(snapshot_path.to_string_lossy())
+            .execute(&self.db)
+            .await?;
+
+        debug!(
+            "Created snapshot of entity {} at {}",
+            self.entity.name,
+            snapshot_path.display()
+        );
         Ok(())
     }
 }
