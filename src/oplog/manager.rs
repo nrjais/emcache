@@ -55,7 +55,7 @@ impl Task for OplogManager {
             tokio::select! {
                 Some(oplogs) = stream.next() => {
                     info!("Flushing batch of {} oplogs", oplogs.len());
-                    if oplogs.len() == 0 {
+                    if oplogs.is_empty() {
                         continue;
                     }
                     let last_oplog = oplogs[oplogs.len() - 1].clone();

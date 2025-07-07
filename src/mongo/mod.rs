@@ -29,7 +29,6 @@ use crate::{
     config::AppConfig,
     entity::EntityManager,
     executor::Task,
-    storage::PostgresClient,
     types::{Entity, OplogEvent},
 };
 pub use resume_token::ResumeTokenManager;
@@ -41,7 +40,6 @@ struct ActiveStream {
 }
 
 pub struct MongoClient {
-    postgres: PostgresClient,
     sources: HashMap<String, Database>,
     event_channel: mpsc::Sender<OplogEvent>,
     entity_manager: Arc<EntityManager>,
@@ -52,7 +50,6 @@ pub struct MongoClient {
 impl MongoClient {
     pub async fn new(
         config: &AppConfig,
-        pg: &PostgresClient,
         event_channel: mpsc::Sender<OplogEvent>,
         entity_manager: Arc<EntityManager>,
         token_manager: Arc<ResumeTokenManager>,
@@ -61,7 +58,6 @@ impl MongoClient {
         Ok(Self {
             event_channel,
             sources,
-            postgres: pg.clone(),
             entity_manager,
             active_streams: Arc::new(Mutex::new(HashMap::new())),
             token_manager,

@@ -36,7 +36,6 @@ impl Systems {
 
         let mongo_client = MongoClient::new(
             &conf,
-            &postgres_client,
             oplog_sender,
             entity_manager.clone(),
             resume_token_manager.clone(),
