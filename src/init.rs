@@ -14,7 +14,8 @@ use crate::oplog::{OplogDatabase, OplogManager};
 use crate::replicator::Replicator;
 use crate::replicator::metadata::MetadataDb;
 use crate::replicator::sqlite::SqliteManager;
-use crate::storage::{PostgresClient, metadata_sqlite};
+use crate::snapshot::SnapshotManager;
+use crate::storage::PostgresClient;
 
 pub struct Systems {
     pub api_server: ApiServer,
@@ -44,11 +45,9 @@ impl Systems {
         )
         .await?;
 
-        let meta = metadata_sqlite(&conf).await?;
-        let metadata_db = MetadataDb::new(meta.clone());
+        let metadata_db = MetadataDb::new(&conf.cache.base_dir)?;
 
         entity_manager.init().await?;
-        metadata_db.init().await?;
 
         let replicator = Replicator::new(
             postgres_client.clone(),
@@ -57,6 +56,7 @@ impl Systems {
             sqlite_manager.clone(),
         );
 
+        let snapshot_manager = Arc::new(SnapshotManager::new(entity_manager.clone(), sqlite_manager.clone()));
         let task_server = TaskServer::new();
 
         register_tasks(
@@ -66,10 +66,11 @@ impl Systems {
             &entity_manager,
             &task_server,
             resume_token_manager,
+            &snapshot_manager,
         )
         .await?;
 
-        let api_server = ApiServer::new(conf.clone(), entity_manager, oplog_db);
+        let api_server = ApiServer::new(conf.clone(), entity_manager, oplog_db, snapshot_manager);
 
         Ok(Systems {
             api_server,
@@ -85,12 +86,14 @@ async fn register_tasks(
     entity_manager: &Arc<EntityManager>,
     task_server: &TaskServer,
     resume_token_manager: Arc<ResumeTokenManager>,
+    snapshot_manager: &Arc<SnapshotManager>,
 ) -> Result<(), anyhow::Error> {
     task_server.register(mongo_client).await?;
     task_server.register(oplog_manager).await?;
     task_server.register(replicator).await?;
     task_server.register(Arc::clone(entity_manager)).await?;
     task_server.register(resume_token_manager).await?;
+    task_server.register(Arc::clone(snapshot_manager)).await?;
     Ok(())
 }
 

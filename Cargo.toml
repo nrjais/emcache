@@ -3,9 +3,6 @@ name = "emcache"
 version = "0.1.0"
 edition = "2024"
 
-[package.metadata.sqlx]
-offline = true
-
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
@@ -17,15 +14,16 @@ deadpool-postgres = "0.14"
 futures = "0.3"
 futures-batch = "0.6"
 mongodb = "3.2"
+rusqlite = { version = "0.32", features = ["bundled", "chrono", "serde_json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sqlx = { version = "0.8", features = [
+sqlx = { version = "0.8", default-features = false, features = [
   "chrono",
   "json",
+  "macros",
   "migrate",
   "postgres",
   "runtime-tokio-rustls",
-  "sqlite",
 ] }
 tempfile = "3.20"
 thiserror = "2.0"

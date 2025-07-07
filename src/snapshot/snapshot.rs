@@ -12,7 +12,7 @@ pub struct Snapshot {
 }
 
 pub struct SnapshotRef {
-    file: File,
+    pub file: File,
 }
 
 impl Snapshot {

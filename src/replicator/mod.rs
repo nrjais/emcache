@@ -129,7 +129,7 @@ impl Replicator {
     }
 
     async fn update_last_processed_id(&self, max_processed_id: i64) -> anyhow::Result<()> {
-        self.meta.set_last_processed_id(max_processed_id).await
+        self.meta.set_last_processed_id(max_processed_id)
     }
 }
 

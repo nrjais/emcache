@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use dashmap::DashMap;
-use sqlx::sqlite::SqlitePoolOptions;
+use rusqlite::Connection;
 use tokio::fs;
 use tracing::{debug, info};
 
@@ -29,7 +30,7 @@ impl SqliteManager {
 
         self.dbs.insert(entity.name.clone(), cache.clone());
 
-        info!("Created SQLite connection pool for entity: {}", entity.name);
+        info!("Created SQLite connection for entity: {}", entity.name);
         Ok(cache)
     }
 
@@ -40,15 +41,17 @@ impl SqliteManager {
             fs::create_dir_all(parent).await?;
         }
 
-        let connection_string = format!("sqlite:{}?mode=rwc", db_path.display());
+        let connection = Connection::open(&db_path)?;
+        // Enable WAL mode for better concurrent access
+        connection.execute("PRAGMA journal_mode = WAL", [])?;
+        connection.execute("PRAGMA synchronous = NORMAL", [])?;
+        connection.execute("PRAGMA cache_size = 1000", [])?;
+        connection.execute("PRAGMA temp_store = MEMORY", [])?;
 
-        let pool = SqlitePoolOptions::new()
-            .max_connections(10)
-            .connect(&connection_string)
-            .await?;
+        let connection = Arc::new(Mutex::new(connection));
 
         debug!("Created SQLite database at: {}", db_path.display());
-        let local_cache = LocalCache::new(pool, entity.clone());
+        let local_cache = LocalCache::new(connection, entity.clone());
         local_cache.init().await?;
 
         Ok(local_cache)
@@ -67,7 +70,7 @@ impl SqliteManager {
 
         if let Some(pool) = self.dbs.remove(entity_name) {
             pool.1.close().await;
-            debug!("Closed connection pool for entity: {}", entity_name);
+            debug!("Closed connection for entity: {}", entity_name);
         }
 
         let entity_dir = Path::new(&self.base_dir).join(entity_name);
@@ -79,15 +82,14 @@ impl SqliteManager {
         Ok(())
     }
 
-    pub async fn snapshot_to(&self, entity: &Entity, snapshot_path: &Path) -> anyhow::Result<()> {
+    pub async fn snapshot_to(&self, entity: &Entity, snapshot_path: &Path) -> anyhow::Result<i64> {
         let cache = self.get_or_create_cache(entity).await?;
-        cache.snapshot_to(snapshot_path).await?;
-        Ok(())
+        cache.snapshot_to(snapshot_path).await
     }
 
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         for db in &self.dbs {
-            debug!("Closing SQLite connection pool for entity: {}", db.key());
+            debug!("Closing SQLite connection for entity: {}", db.key());
             db.value().close().await;
         }
         self.dbs.clear();
