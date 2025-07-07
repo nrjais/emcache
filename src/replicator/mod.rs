@@ -58,7 +58,7 @@ impl Replicator {
                     break;
                 }
                 _ = interval.tick() => {
-                    self.tick(&mut last_processed_id).await?;
+                    self.tick(&mut last_processed_id).await;
                 }
             }
         }
@@ -68,13 +68,16 @@ impl Replicator {
         Ok(())
     }
 
-    async fn tick(&self, last_processed_id: &mut i64) -> anyhow::Result<()> {
+    async fn tick(&self, last_processed_id: &mut i64) {
         let result = self.process_oplog_batch(*last_processed_id).await;
 
-        let Ok(max_processed_id) = result else {
-            error!("Failed to process oplog batch");
-            sleep(self.interval).await;
-            return Ok(());
+        let max_processed_id = match result {
+            Ok(max_processed_id) => max_processed_id,
+            Err(e) => {
+                error!("Failed to process oplog batch: {}", e);
+                sleep(self.interval).await;
+                return;
+            }
         };
 
         let max_processed_id = max_processed_id.max(*last_processed_id);
@@ -87,8 +90,6 @@ impl Replicator {
         } else {
             sleep(self.interval).await;
         }
-
-        Ok(())
     }
 
     async fn process_oplog_batch(&self, last_processed_id: i64) -> anyhow::Result<i64> {

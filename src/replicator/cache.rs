@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use rusqlite::{Connection, backup::Backup, params};
+use rusqlite::{Connection, Transaction, backup::Backup, params};
 use tracing::debug;
 
 use crate::replicator::migrator::{DATA_TABLE, METADATA_TABLE};
@@ -97,7 +97,7 @@ impl LocalCache {
         Ok(())
     }
 
-    fn apply_upsert(tx: &rusqlite::Transaction, entity: &Entity, oplog: &Oplog) -> anyhow::Result<()> {
+    fn apply_upsert(tx: &Transaction, entity: &Entity, oplog: &Oplog) -> anyhow::Result<()> {
         let query = format!("INSERT OR REPLACE INTO {DATA_TABLE} (id, data) VALUES (?1, ?2)");
 
         tx.execute(&query, params![&oplog.doc_id, &serde_json::to_string(&oplog.data)?,])?;
@@ -106,7 +106,7 @@ impl LocalCache {
         Ok(())
     }
 
-    fn apply_delete(tx: &rusqlite::Transaction, entity: &Entity, oplog: &Oplog) -> anyhow::Result<()> {
+    fn apply_delete(tx: &Transaction, entity: &Entity, oplog: &Oplog) -> anyhow::Result<()> {
         let query = format!("DELETE FROM {DATA_TABLE} WHERE id = ?1");
         let rows_affected = tx.execute(&query, params![&oplog.doc_id])?;
 
@@ -117,7 +117,7 @@ impl LocalCache {
         Ok(())
     }
 
-    fn set_last_processed_id(&self, tx: &rusqlite::Transaction, last_processed_id: i64) -> anyhow::Result<()> {
+    fn set_last_processed_id(&self, tx: &Transaction, last_processed_id: i64) -> anyhow::Result<()> {
         let query = format!(
             "INSERT INTO {METADATA_TABLE} (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         );
