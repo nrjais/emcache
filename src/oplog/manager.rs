@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -17,16 +17,21 @@ use futures_batch::ChunksTimeoutStreamExt;
 pub struct OplogManager {
     processor: OplogProcessor,
     event_receiver: Arc<Mutex<Option<mpsc::Receiver<OplogEvent>>>>,
+    ack_sender: broadcast::Sender<OplogEvent>,
 }
 
 impl OplogManager {
-    pub async fn new(client: PostgresClient) -> Result<(Self, mpsc::Sender<OplogEvent>)> {
+    pub async fn new(
+        client: PostgresClient,
+        ack_sender: broadcast::Sender<OplogEvent>,
+    ) -> Result<(Self, mpsc::Sender<OplogEvent>)> {
         let processor = OplogProcessor::new(client);
-        let (sender, receiver) = mpsc::channel(1000); // Choose appropriate buffer size
+        let (sender, receiver) = mpsc::channel(1000);
 
         let manager = Self {
             processor,
             event_receiver: Arc::new(Mutex::new(Some(receiver))),
+            ack_sender,
         };
 
         Ok((manager, sender))
@@ -53,8 +58,12 @@ impl Task for OplogManager {
                     if oplogs.len() == 0 {
                         continue;
                     }
-                    info!("Oplog from, first: {:?}, last: {:?}", oplogs[0].from, oplogs[oplogs.len() - 1].from);
+                    let last_oplog = oplogs[oplogs.len() - 1].clone();
+
+                    info!("Oplog from, first: {:?}, last: {:?}", oplogs[0].from, last_oplog.from);
+
                     self.processor.flush_batch(oplogs).await?;
+                    let _ = self.ack_sender.send(last_oplog);
                 }
                 _ = cancellation_token.cancelled() => {
                     info!("Oplog manager cancelled");

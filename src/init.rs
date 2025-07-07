@@ -2,13 +2,14 @@ use anyhow::Result;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 use tracing_subscriber::EnvFilter;
 
 use crate::api::ApiServer;
 use crate::config::AppConfig;
 use crate::entity::EntityManager;
 use crate::executor::TaskServer;
-use crate::mongo::MongoClient;
+use crate::mongo::{MongoClient, ResumeTokenManager};
 use crate::oplog::{OplogDatabase, OplogManager};
 use crate::replicator::Replicator;
 use crate::replicator::metadata::MetadataDb;
@@ -28,8 +29,19 @@ impl Systems {
         let entity_manager = Arc::new(EntityManager::new(postgres_client.clone()));
         let oplog_db = OplogDatabase::new(postgres_client.clone());
 
-        let (oplog_manager, oplog_sender) = OplogManager::new(postgres_client.clone()).await?;
-        let mongo_client = MongoClient::new(&conf, &postgres_client, oplog_sender, entity_manager.clone()).await?;
+        let (oplog_ack_sender, oplog_ack_receiver) = broadcast::channel(10);
+
+        let (oplog_manager, oplog_sender) = OplogManager::new(postgres_client.clone(), oplog_ack_sender).await?;
+        let resume_token_manager = Arc::new(ResumeTokenManager::new(postgres_client.clone(), oplog_ack_receiver));
+
+        let mongo_client = MongoClient::new(
+            &conf,
+            &postgres_client,
+            oplog_sender,
+            entity_manager.clone(),
+            resume_token_manager.clone(),
+        )
+        .await?;
 
         let meta = metadata_sqlite(&conf).await?;
         let metadata_db = MetadataDb::new(meta.clone());
@@ -41,7 +53,15 @@ impl Systems {
 
         let task_server = TaskServer::new();
 
-        register_tasks(oplog_manager, mongo_client, replicator, &entity_manager, &task_server).await?;
+        register_tasks(
+            oplog_manager,
+            mongo_client,
+            replicator,
+            &entity_manager,
+            &task_server,
+            resume_token_manager,
+        )
+        .await?;
 
         let api_server = ApiServer::new(conf.clone(), entity_manager, oplog_db);
 
@@ -58,11 +78,13 @@ async fn register_tasks(
     replicator: Replicator,
     entity_manager: &Arc<EntityManager>,
     task_server: &TaskServer,
+    resume_token_manager: Arc<ResumeTokenManager>,
 ) -> Result<(), anyhow::Error> {
     task_server.register(mongo_client).await?;
     task_server.register(oplog_manager).await?;
     task_server.register(replicator).await?;
     task_server.register(Arc::clone(entity_manager)).await?;
+    task_server.register(resume_token_manager).await?;
     Ok(())
 }
 

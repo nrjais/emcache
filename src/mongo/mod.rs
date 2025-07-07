@@ -17,7 +17,11 @@ use mongodb::{
     change_stream::event::ResumeToken,
     options::FullDocumentType,
 };
-use tokio::{sync::mpsc, task::JoinHandle, time::timeout};
+use tokio::{
+    sync::{Mutex, mpsc},
+    task::JoinHandle,
+    time::timeout,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
@@ -28,6 +32,7 @@ use crate::{
     storage::PostgresClient,
     types::{Entity, OplogEvent},
 };
+pub use resume_token::ResumeTokenManager;
 
 #[derive(Debug)]
 struct ActiveStream {
@@ -40,7 +45,8 @@ pub struct MongoClient {
     sources: HashMap<String, Database>,
     event_channel: mpsc::Sender<OplogEvent>,
     entity_manager: Arc<EntityManager>,
-    active_streams: Arc<tokio::sync::Mutex<HashMap<String, ActiveStream>>>,
+    active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
+    token_manager: Arc<ResumeTokenManager>,
 }
 
 impl MongoClient {
@@ -49,6 +55,7 @@ impl MongoClient {
         pg: &PostgresClient,
         event_channel: mpsc::Sender<OplogEvent>,
         entity_manager: Arc<EntityManager>,
+        token_manager: Arc<ResumeTokenManager>,
     ) -> anyhow::Result<Self> {
         let sources = Self::init_sources(config).await?;
         Ok(Self {
@@ -56,7 +63,8 @@ impl MongoClient {
             sources,
             postgres: pg.clone(),
             entity_manager,
-            active_streams: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            active_streams: Arc::new(Mutex::new(HashMap::new())),
+            token_manager,
         })
     }
 
@@ -67,10 +75,6 @@ impl MongoClient {
             sources.insert(name.clone(), client.database(&source.database));
         }
         Ok(sources)
-    }
-
-    pub async fn checkpoint_oplog(&self, oplog: &OplogEvent) -> anyhow::Result<()> {
-        resume_token::save(&self.postgres, &oplog.oplog.entity, &oplog.data).await
     }
 
     async fn monitor_entities(&self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
@@ -143,7 +147,7 @@ impl MongoClient {
 
         let entity_clone = entity.clone();
         let event_channel = self.event_channel.clone();
-        let postgres = self.postgres.clone();
+        let token_manager = self.token_manager.clone();
         let sources = self.sources.clone();
 
         let source_db = sources
@@ -152,14 +156,21 @@ impl MongoClient {
             .clone();
 
         let handle = tokio::spawn(async move {
-            Self::stream_entity_changes(postgres, source_db, event_channel, entity_clone, cancel_token_clone).await
+            Self::stream_entity_changes(
+                token_manager,
+                source_db,
+                event_channel,
+                entity_clone,
+                cancel_token_clone,
+            )
+            .await
         });
 
         Ok(ActiveStream { cancel_token, handle })
     }
 
     async fn stream_entity_changes(
-        postgres: PostgresClient,
+        token_manager: Arc<ResumeTokenManager>,
         source_db: Database,
         event_channel: mpsc::Sender<OplogEvent>,
         entity: Entity,
@@ -170,7 +181,7 @@ impl MongoClient {
             entity.name, entity.source
         );
 
-        let mut stream = create_change_stream(&postgres, &source_db, &entity.name, &entity.source).await?;
+        let mut stream = create_change_stream(token_manager, &source_db, &entity.name, &entity.source).await?;
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -219,12 +230,12 @@ impl MongoClient {
 }
 
 async fn create_change_stream(
-    postgres: &PostgresClient,
+    resume_token_manager: Arc<ResumeTokenManager>,
     database: &Database,
     entity: &str,
     collection: &str,
 ) -> anyhow::Result<Pin<Box<dyn Stream<Item = OplogEvent> + Send>>> {
-    let resume_token = resume_token::fetch(postgres, entity).await?;
+    let resume_token = resume_token_manager.fetch(entity).await?;
     let resume_token = resume_token.map(|token| token.token_data());
     let has_resume_token = resume_token.is_some();
 
