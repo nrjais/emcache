@@ -10,7 +10,7 @@ pub struct MetadataDb {
 
 impl MetadataDb {
     pub fn new(base_dir: &str) -> anyhow::Result<Self> {
-        let conn = Connection::open(format!("{}/metadata.db", base_dir))?;
+        let conn = Connection::open(format!("{base_dir}/metadata.db"))?;
         let db = Arc::new(Mutex::new(conn));
 
         let db = Self { db };
@@ -21,7 +21,7 @@ impl MetadataDb {
 
     pub fn get_last_processed_id(&self) -> anyhow::Result<i64> {
         let conn = self.db.lock().unwrap();
-        let query = format!("SELECT value FROM {} WHERE key = ?", META_TABLE_NAME);
+        let query = format!("SELECT value FROM {META_TABLE_NAME} WHERE key = ?");
 
         let mut stmt = conn.prepare(&query)?;
         let result: Result<i64, rusqlite::Error> = stmt.query_row(params![LAST_PROCESSED_ID], |row| row.get(0));
@@ -36,8 +36,7 @@ impl MetadataDb {
     pub fn set_last_processed_id(&self, last_processed_id: i64) -> anyhow::Result<()> {
         let conn = self.db.lock().unwrap();
         let query = format!(
-            "INSERT INTO {} (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?",
-            META_TABLE_NAME
+            "INSERT INTO {META_TABLE_NAME} (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?"
         );
 
         conn.execute(&query, params![LAST_PROCESSED_ID, last_processed_id, last_processed_id])?;
@@ -47,8 +46,7 @@ impl MetadataDb {
     pub fn init(&self) -> anyhow::Result<()> {
         let conn = self.db.lock().unwrap();
         let query = format!(
-            "CREATE TABLE IF NOT EXISTS {} (key TEXT PRIMARY KEY, value ANY) STRICT",
-            META_TABLE_NAME
+            "CREATE TABLE IF NOT EXISTS {META_TABLE_NAME} (key TEXT PRIMARY KEY, value ANY) STRICT"
         );
         conn.execute(&query, [])?;
         Ok(())

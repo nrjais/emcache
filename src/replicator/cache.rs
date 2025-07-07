@@ -4,9 +4,10 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicI64, Ordering},
     },
+    time::Duration,
 };
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, backup::Backup, params};
 use tracing::debug;
 
 use crate::replicator::migrator::{DATA_TABLE, METADATA_TABLE};
@@ -50,7 +51,7 @@ impl LocalCache {
 
     fn load_last_processed_id(&self) -> anyhow::Result<i64> {
         let conn = self.db.lock().unwrap();
-        let query = format!("SELECT value FROM {} WHERE key = ?", METADATA_TABLE);
+        let query = format!("SELECT value FROM {METADATA_TABLE} WHERE key = ?");
 
         let mut stmt = conn.prepare(&query)?;
         let result: Result<i64, rusqlite::Error> = stmt.query_row(params![LAST_PROCESSED_ID_KEY], |row| row.get(0));
@@ -102,7 +103,7 @@ impl LocalCache {
     }
 
     fn apply_upsert(tx: &rusqlite::Transaction, entity: &Entity, oplog: &Oplog) -> anyhow::Result<()> {
-        let query = format!("INSERT OR REPLACE INTO {} (id, data) VALUES (?1, ?2)", DATA_TABLE);
+        let query = format!("INSERT OR REPLACE INTO {DATA_TABLE} (id, data) VALUES (?1, ?2)");
 
         tx.execute(&query, params![&oplog.doc_id, &serde_json::to_string(&oplog.data)?,])?;
 
@@ -111,7 +112,7 @@ impl LocalCache {
     }
 
     fn apply_delete(tx: &rusqlite::Transaction, entity: &Entity, oplog: &Oplog) -> anyhow::Result<()> {
-        let query = format!("DELETE FROM {} WHERE id = ?1", DATA_TABLE);
+        let query = format!("DELETE FROM {DATA_TABLE} WHERE id = ?1");
         let rows_affected = tx.execute(&query, params![&oplog.doc_id])?;
 
         debug!(
@@ -123,8 +124,7 @@ impl LocalCache {
 
     fn set_last_processed_id(&self, tx: &rusqlite::Transaction, last_processed_id: i64) -> anyhow::Result<()> {
         let query = format!(
-            "INSERT INTO {} (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            METADATA_TABLE
+            "INSERT INTO {METADATA_TABLE} (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         );
 
         tx.execute(&query, params![LAST_PROCESSED_ID_KEY, last_processed_id])?;
@@ -133,15 +133,9 @@ impl LocalCache {
 
     pub async fn snapshot_to(&self, snapshot_path: &Path) -> anyhow::Result<i64> {
         let conn = self.db.lock().unwrap();
-        let backup_query = format!("VACUUM INTO ?1");
-
-        conn.execute(&backup_query, params![snapshot_path.to_string_lossy()])?;
-
-        debug!(
-            "Created snapshot of entity {} at {}",
-            self.entity.name,
-            snapshot_path.display()
-        );
+        let mut dst = Connection::open(snapshot_path)?;
+        let backup = Backup::new(&conn, &mut dst)?;
+        backup.run_to_completion(1000, Duration::from_millis(1), None)?;
 
         Ok(self.last_processed_id.load(Ordering::Relaxed))
     }

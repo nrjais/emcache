@@ -1,4 +1,4 @@
-pub mod snapshot;
+pub mod snapshot_ref;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use crate::entity::EntityManager;
 use crate::executor::Task;
 use crate::replicator::sqlite::SqliteManager;
-use crate::snapshot::snapshot::{Snapshot, SnapshotRef};
+use crate::snapshot::snapshot_ref::{Snapshot, SnapshotRef};
 use crate::types::Entity;
 
 pub struct SnapshotManager {
@@ -66,17 +66,15 @@ impl Task for SnapshotManager {
         "snapshot".to_string()
     }
 
-    fn execute(&self, cancellation_token: CancellationToken) -> impl Future<Output = anyhow::Result<()>> + Send {
-        async move {
-            let mut interval = interval(Duration::from_secs(10));
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        self.remove_stale_snapshots();
-                    }
-                    _ = cancellation_token.cancelled() => {
-                        return Ok(());
-                    }
+    async fn execute(&self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
+        let mut interval = interval(Duration::from_secs(10));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    self.remove_stale_snapshots();
+                }
+                _ = cancellation_token.cancelled() => {
+                    return Ok(());
                 }
             }
         }

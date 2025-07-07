@@ -32,7 +32,7 @@ async fn get_snapshot(
         (header::CONTENT_TYPE, "application/octet-stream"),
         (
             header::CONTENT_DISPOSITION,
-            &format!("attachment; filename=\"{}\".db", name),
+            &format!("attachment; filename=\"{name}\".db"),
         ),
     ];
 
