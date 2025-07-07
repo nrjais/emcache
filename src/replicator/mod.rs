@@ -85,10 +85,6 @@ impl Replicator {
             let _ = self.update_last_processed_id(max_processed_id).await;
             *last_processed_id = max_processed_id;
         } else {
-            info!(
-                "No new oplogs to process, sleeping for {} seconds",
-                self.interval.as_secs()
-            );
             sleep(self.interval).await;
         }
 
