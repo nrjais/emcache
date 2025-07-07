@@ -18,15 +18,17 @@ pub struct EntityManager {
     db: EntityDatabase,
     cache: DashMap<String, Entity>,
     broadcast_tx: broadcast::Sender<()>,
+    refresh_interval: Duration,
 }
 
 impl EntityManager {
-    pub fn new(db: PostgresClient) -> Self {
+    pub fn new(db: PostgresClient, refresh_interval: Duration) -> Self {
         let (tx, _) = broadcast::channel(1);
         Self {
             db: EntityDatabase::new(db),
             cache: DashMap::new(),
             broadcast_tx: tx,
+            refresh_interval,
         }
     }
 
@@ -79,7 +81,7 @@ impl EntityManager {
     }
 
     async fn refresh_loop(&self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
-        let mut interval = interval(Duration::from_secs(10));
+        let mut interval = interval(self.refresh_interval);
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {

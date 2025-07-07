@@ -1,11 +1,8 @@
+use super::AppState;
 use axum::{extract::State, http::StatusCode, response::Json};
 use serde_json::{Value as JsonValue, json};
 use std::collections::HashMap;
-// Health check endpoints - errors handled with anyhow
 
-use super::AppState;
-
-/// Health check endpoint
 pub async fn health_check() -> Json<JsonValue> {
     Json(json!({
         "status": "healthy",
@@ -13,14 +10,12 @@ pub async fn health_check() -> Json<JsonValue> {
     }))
 }
 
-/// Detailed health check endpoint
 pub async fn detailed_health_check(
     State(state): State<AppState>,
 ) -> Result<Json<JsonValue>, (StatusCode, Json<JsonValue>)> {
     let mut health_status = HashMap::new();
     let mut overall_healthy = true;
 
-    // Check entity manager
     match state.entity_manager.get_all_entities().await {
         Ok(entities) => {
             health_status.insert(

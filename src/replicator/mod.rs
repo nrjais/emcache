@@ -33,6 +33,7 @@ impl Replicator {
         entity_manager: Arc<EntityManager>,
         meta: MetadataDb,
         sqlite_manager: Arc<SqliteManager>,
+        interval: Duration,
     ) -> Self {
         Self {
             meta,
@@ -40,7 +41,7 @@ impl Replicator {
             database: OplogDatabase::new(postgres_client),
             entity_manager,
             batch_size: 100,
-            interval: Duration::from_secs(1),
+            interval,
         }
     }
 

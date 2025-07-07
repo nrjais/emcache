@@ -1,9 +1,10 @@
+use std::str::FromStr;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sqlx::prelude::FromRow;
 
-/// Operation type for oplog entries
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Operation {
@@ -30,7 +31,7 @@ impl std::fmt::Display for Operation {
     }
 }
 
-impl std::str::FromStr for Operation {
+impl FromStr for Operation {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -42,7 +43,6 @@ impl std::str::FromStr for Operation {
     }
 }
 
-/// Data type for entity columns
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum DataType {
@@ -55,7 +55,6 @@ pub enum DataType {
     Bytes,
 }
 
-/// Column definition for entity shapes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Column {
     pub name: String,
@@ -64,7 +63,6 @@ pub struct Column {
     pub path: String,
 }
 
-/// Entity shape definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Shape {
     pub columns: Vec<Column>,
@@ -83,7 +81,6 @@ pub struct OplogEvent {
     pub data: JsonValue,
 }
 
-/// Oplog entry representing a change operation
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Oplog {
     pub id: i64,
@@ -94,7 +91,6 @@ pub struct Oplog {
     pub created_at: DateTime<Utc>,
 }
 
-/// Entity definition stored in PostgreSQL
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Entity {
     pub id: i64,
@@ -103,31 +99,4 @@ pub struct Entity {
     pub source: String,
     pub shape: Shape,
     pub created_at: DateTime<Utc>,
-}
-
-/// Resume token tracking for MongoDB change streams
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResumeToken {
-    pub id: i64,
-    pub token: String,
-    pub version: i32,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-/// Metadata entry for key-value storage
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Metadata {
-    pub key: String,
-    pub value: JsonValue,
-}
-
-/// Statistics about entity versions
-#[derive(Debug, serde::Serialize)]
-pub struct EntityVersionStats {
-    pub total_entity_versions: u64,
-    pub unique_entity_names: u64,
-    pub live_versions: u64,
-    pub archived_versions: u64,
-    pub max_version: i32,
 }

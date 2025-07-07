@@ -3,22 +3,20 @@ pub mod health;
 pub mod oplogs;
 mod snapshot;
 
-// Re-exports not needed since modules are used directly in routes
-
 use anyhow::Result;
 use axum::{Router, routing::get};
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tower_http::compression::CompressionLayer;
 use tracing::info;
 
-use crate::config::AppConfig;
+use crate::config::Configs;
 use crate::entity::EntityManager;
 use crate::oplog::OplogDatabase;
 use crate::snapshot::SnapshotManager;
 
-/// API server for EMCachers management
 pub struct ApiServer {
-    config: AppConfig,
+    config: Configs,
     entity_manager: Arc<EntityManager>,
     oplog_db: OplogDatabase,
     snapshot_manager: Arc<SnapshotManager>,
@@ -26,7 +24,7 @@ pub struct ApiServer {
 
 impl ApiServer {
     pub fn new(
-        config: AppConfig,
+        config: Configs,
         entity_manager: Arc<EntityManager>,
         oplog_db: OplogDatabase,
         snapshot_manager: Arc<SnapshotManager>,
@@ -47,6 +45,7 @@ impl ApiServer {
         };
 
         let app = Router::new()
+            .layer(CompressionLayer::new().gzip(true).zstd(true))
             .route("/health", get(health::health_check))
             .route("/health/detailed", get(health::detailed_health_check))
             .merge(entities::router())
@@ -66,7 +65,6 @@ impl ApiServer {
     }
 }
 
-/// Application state for handlers
 #[derive(Clone)]
 pub struct AppState {
     pub entity_manager: Arc<EntityManager>,

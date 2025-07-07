@@ -12,7 +12,6 @@ use tracing::error;
 use super::AppState;
 use crate::types::{Entity, Shape};
 
-/// Create entity management router
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/entities", get(get_entities))
@@ -21,7 +20,6 @@ pub fn router() -> Router<AppState> {
         .route("/entities/{name}", delete(delete_entity))
 }
 
-/// Get all entities
 async fn get_entities(State(state): State<AppState>) -> Result<Json<Vec<Entity>>, (StatusCode, Json<JsonValue>)> {
     match state.entity_manager.get_all_entities().await {
         Ok(entities) => Ok(Json(entities)),
@@ -35,7 +33,6 @@ async fn get_entities(State(state): State<AppState>) -> Result<Json<Vec<Entity>>
     }
 }
 
-/// Create a new entity
 async fn create_entity(
     State(state): State<AppState>,
     Json(request): Json<CreateEntityRequest>,
@@ -61,7 +58,6 @@ async fn create_entity(
     }
 }
 
-/// Get a specific entity
 async fn get_entity(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -72,7 +68,6 @@ async fn get_entity(
     }
 }
 
-/// Delete an entity
 async fn delete_entity(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -89,7 +84,6 @@ async fn delete_entity(
     }
 }
 
-// Request/Response types
 #[derive(Deserialize)]
 pub struct CreateEntityRequest {
     pub name: String,

@@ -34,11 +34,6 @@ impl LocalCache {
         }
     }
 
-    pub async fn close(&self) {
-        // Connection will be closed when Arc is dropped
-        debug!("Closing SQLite connection for entity: {}", self.entity.name);
-    }
-
     pub async fn init(&self) -> anyhow::Result<()> {
         let conn = self.db.lock().unwrap();
         run_migrations(&conn, &self.entity.shape)?;
@@ -135,7 +130,7 @@ impl LocalCache {
         let conn = self.db.lock().unwrap();
         let mut dst = Connection::open(snapshot_path)?;
         let backup = Backup::new(&conn, &mut dst)?;
-        backup.run_to_completion(1000, Duration::from_millis(1), None)?;
+        backup.run_to_completion(1000, Duration::from_micros(1), None)?;
 
         Ok(self.last_processed_id.load(Ordering::Relaxed))
     }

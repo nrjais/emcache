@@ -42,7 +42,7 @@ impl SqliteManager {
         }
 
         let connection = Connection::open(&db_path)?;
-        // Enable WAL mode for better concurrent access
+
         connection.execute("PRAGMA journal_mode = WAL", [])?;
         connection.execute("PRAGMA synchronous = NORMAL", [])?;
         connection.execute("PRAGMA cache_size = 1000", [])?;
@@ -68,8 +68,7 @@ impl SqliteManager {
     pub async fn delete_database(&self, entity_name: &str) -> anyhow::Result<()> {
         info!("Removing cache database for entity: {}", entity_name);
 
-        if let Some(pool) = self.dbs.remove(entity_name) {
-            pool.1.close().await;
+        if let Some(_) = self.dbs.remove(entity_name) {
             debug!("Closed connection for entity: {}", entity_name);
         }
 
@@ -88,10 +87,6 @@ impl SqliteManager {
     }
 
     pub async fn shutdown(&self) -> anyhow::Result<()> {
-        for db in &self.dbs {
-            debug!("Closing SQLite connection for entity: {}", db.key());
-            db.value().close().await;
-        }
         self.dbs.clear();
 
         Ok(())

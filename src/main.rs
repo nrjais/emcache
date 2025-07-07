@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use anyhow::Result;
 use tokio::signal;
 use tracing::{error, info};
@@ -12,19 +10,19 @@ mod init;
 pub mod mongo;
 mod oplog;
 pub mod replicator;
+mod snapshot;
 pub mod storage;
 mod types;
-mod snapshot;
 
-use crate::{config::AppConfig, init::Systems};
+use crate::{config::Configs, init::Systems};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = AppConfig::load().expect("Failed to load configuration");
+    let config = Configs::load().expect("Failed to load configuration");
     init::setup_logging(&config.logging.level);
     info!("Configuration loaded successfully: {:#?}", config);
 
-    let systems = Systems::init(config).await?;
+    let systems = Systems::init(&config).await?;
     info!("Starting EMCache server");
 
     let shutdown_signal = shutdown_signal();
@@ -41,7 +39,7 @@ async fn main() -> Result<()> {
                 _ = systems.task_server.shutdown() => {
                     info!("Task server shutdown completed");
                 }
-                _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                _ = tokio::time::sleep(config.server.shutdown_timeout) => {
                     info!("Shutting down task server timed out, force killing");
                 }
             }

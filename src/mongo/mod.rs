@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    config::AppConfig,
+    config::Configs,
     entity::EntityManager,
     executor::Task,
     types::{Entity, OplogEvent},
@@ -49,7 +49,7 @@ pub struct MongoClient {
 
 impl MongoClient {
     pub async fn new(
-        config: &AppConfig,
+        config: &Configs,
         event_channel: mpsc::Sender<OplogEvent>,
         entity_manager: Arc<EntityManager>,
         token_manager: Arc<ResumeTokenManager>,
@@ -64,7 +64,7 @@ impl MongoClient {
         })
     }
 
-    async fn init_sources(config: &AppConfig) -> anyhow::Result<HashMap<String, Database>> {
+    async fn init_sources(config: &Configs) -> anyhow::Result<HashMap<String, Database>> {
         let mut sources = HashMap::new();
         for (name, source) in &config.sources {
             let client = Client::with_uri_str(&source.uri).await?;

@@ -1,10 +1,8 @@
-use std::time::Duration;
-
 use anyhow::Result;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tracing::info;
 
-use crate::config::AppConfig;
+use crate::config::Configs;
 
 #[derive(Clone)]
 pub struct PostgresClient {
@@ -12,13 +10,13 @@ pub struct PostgresClient {
 }
 
 impl PostgresClient {
-    pub async fn new(config: AppConfig) -> Result<Self> {
+    pub async fn new(config: Configs) -> Result<Self> {
         info!("Initializing database manager with auto migrations");
 
         let pool = PgPoolOptions::new()
             .max_connections(config.database.postgres.max_connections)
             .min_connections(config.database.postgres.min_connections)
-            .acquire_timeout(Duration::from_millis(config.database.postgres.connection_timeout))
+            .acquire_timeout(config.database.postgres.connection_timeout)
             .connect(&config.database.postgres.uri)
             .await?;
 
@@ -30,7 +28,6 @@ impl PostgresClient {
         Ok(Self { pool })
     }
 
-    /// Run PostgreSQL migrations using SQLx auto migration
     async fn run_migrations(pool: &PgPool) -> Result<()> {
         info!("Running PostgreSQL auto migrations");
         sqlx::migrate!("./migrations").run(pool).await?;
@@ -38,7 +35,6 @@ impl PostgresClient {
         Ok(())
     }
 
-    /// Get PostgreSQL pool reference
     pub fn postgres(&self) -> &PgPool {
         &self.pool
     }

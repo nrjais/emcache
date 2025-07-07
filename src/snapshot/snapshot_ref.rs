@@ -16,12 +16,12 @@ pub struct SnapshotRef {
 }
 
 impl Snapshot {
-    pub fn new(entity_name: &str) -> anyhow::Result<Self> {
+    pub fn new(entity_name: &str, base_dir: &str) -> anyhow::Result<Self> {
         let file = Builder::new()
             .prefix(entity_name)
             .suffix("-snap.db")
             .rand_bytes(5)
-            .tempfile()?;
+            .tempfile_in(format!("{}/snapshots", base_dir))?;
         Ok(Self {
             file,
             timestamp: Instant::now(),

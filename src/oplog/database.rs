@@ -4,7 +4,6 @@ use tracing::debug;
 use crate::storage::PostgresClient;
 use crate::types::Oplog;
 
-/// Database operations for oplog management
 #[derive(Clone)]
 pub struct OplogDatabase {
     client: PostgresClient,

@@ -7,6 +7,7 @@ use dashmap::DashMap;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 
+use crate::config::Configs;
 use crate::entity::EntityManager;
 use crate::executor::Task;
 use crate::replicator::sqlite::SqliteManager;
@@ -16,15 +17,21 @@ use crate::types::Entity;
 pub struct SnapshotManager {
     entity_manager: Arc<EntityManager>,
     sqlite_manager: Arc<SqliteManager>,
-    snapshots: DashMap<String, (Snapshot, i64)>,
+    snapshots: DashMap<String, Snapshot>,
+    cleanup_interval: Duration,
+    staleness_duration: Duration,
+    base_dir: String,
 }
 
 impl SnapshotManager {
-    pub fn new(entity_manager: Arc<EntityManager>, sqlite_manager: Arc<SqliteManager>) -> Self {
+    pub fn new(conf: &Configs, entity_manager: Arc<EntityManager>, sqlite_manager: Arc<SqliteManager>) -> Self {
         Self {
+            base_dir: conf.cache.base_dir.to_string(),
             entity_manager,
             sqlite_manager,
             snapshots: DashMap::new(),
+            cleanup_interval: conf.snapshot.cleanup_interval,
+            staleness_duration: conf.snapshot.staleness_duration,
         }
     }
 
@@ -35,7 +42,7 @@ impl SnapshotManager {
             .ok_or(anyhow::anyhow!("Entity not found"))?;
 
         if let Some(snapshot) = self.snapshots.get(&entity.name) {
-            return snapshot.value().0.clone();
+            return snapshot.value().clone();
         }
 
         let snapshot_ref = self.create_snapshot(&entity).await?;
@@ -43,21 +50,20 @@ impl SnapshotManager {
     }
 
     async fn create_snapshot(&self, entity: &Entity) -> anyhow::Result<SnapshotRef> {
-        let snapshot = Snapshot::new(&entity.name)?;
+        let snapshot = Snapshot::new(&entity.name, &self.base_dir)?;
 
-        let last_processed_id = self.sqlite_manager.snapshot_to(entity, snapshot.path()).await?;
+        self.sqlite_manager.snapshot_to(entity, snapshot.path()).await?;
 
         let snapshot_ref = snapshot.clone()?;
 
-        self.snapshots
-            .insert(entity.name.clone(), (snapshot, last_processed_id));
+        self.snapshots.insert(entity.name.clone(), snapshot);
 
         Ok(snapshot_ref)
     }
 
     fn remove_stale_snapshots(&self) {
         self.snapshots
-            .retain(|_, (snapshot, _)| !snapshot.is_stale(Duration::from_secs(10)));
+            .retain(|_, snapshot| !snapshot.is_stale(self.staleness_duration));
     }
 }
 
@@ -67,7 +73,7 @@ impl Task for SnapshotManager {
     }
 
     async fn execute(&self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
-        let mut interval = interval(Duration::from_secs(10));
+        let mut interval = interval(self.cleanup_interval);
         loop {
             tokio::select! {
                 _ = interval.tick() => {

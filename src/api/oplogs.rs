@@ -12,12 +12,10 @@ use tracing::error;
 use super::AppState;
 use crate::types::Oplog;
 
-/// Create oplog router
 pub fn router() -> Router<AppState> {
     Router::new().route("/oplogs", get(get_oplogs))
 }
 
-/// Get oplogs with pagination
 async fn get_oplogs(
     State(state): State<AppState>,
     Query(params): Query<OplogRequest>,

@@ -1,11 +1,10 @@
 [server]
 host = "0.0.0.0"
 port = 8080
+shutdown_timeout = 10000
 
 [logging]
-# Log level: trace, debug, info, warn, error
 level = "info"
-# Log format: json, pretty
 format = "pretty"
 
 [database.postgres]
@@ -20,3 +19,9 @@ database = "test"
 
 [cache]
 base_dir = "caches"
+replication_interval = 1
+entity_refresh_interval = 1000
+
+[snapshot]
+cleanup_interval = 1000
+staleness_duration = 1000

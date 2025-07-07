@@ -6,7 +6,7 @@ use tokio::sync::broadcast;
 use tracing_subscriber::EnvFilter;
 
 use crate::api::ApiServer;
-use crate::config::AppConfig;
+use crate::config::Configs;
 use crate::entity::EntityManager;
 use crate::executor::TaskServer;
 use crate::mongo::{MongoClient, ResumeTokenManager};
@@ -23,12 +23,15 @@ pub struct Systems {
 }
 
 impl Systems {
-    pub async fn init(conf: AppConfig) -> Result<Self> {
+    pub async fn init(conf: &Configs) -> Result<Self> {
         init_base_dir(&conf.cache.base_dir)?;
 
         let postgres_client = PostgresClient::new(conf.clone()).await?;
 
-        let entity_manager = Arc::new(EntityManager::new(postgres_client.clone()));
+        let entity_manager = Arc::new(EntityManager::new(
+            postgres_client.clone(),
+            conf.cache.entity_refresh_interval,
+        ));
         let oplog_db = OplogDatabase::new(postgres_client.clone());
 
         let (oplog_ack_sender, oplog_ack_receiver) = broadcast::channel(10);
@@ -54,9 +57,14 @@ impl Systems {
             entity_manager.clone(),
             metadata_db,
             sqlite_manager.clone(),
+            conf.cache.replication_interval,
         );
 
-        let snapshot_manager = Arc::new(SnapshotManager::new(entity_manager.clone(), sqlite_manager.clone()));
+        let snapshot_manager = Arc::new(SnapshotManager::new(
+            &conf,
+            entity_manager.clone(),
+            sqlite_manager.clone(),
+        ));
         let task_server = TaskServer::new();
 
         register_tasks(
