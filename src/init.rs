@@ -60,6 +60,9 @@ impl Systems {
             entity_manager.clone(),
             sqlite_manager.clone(),
         ));
+
+        snapshot_manager.init().await?;
+
         let task_server = TaskServer::new();
 
         register_tasks(

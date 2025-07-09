@@ -1,5 +1,5 @@
 use mongodb::change_stream::event::ResumeToken;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, broadcast::Receiver};
 use tokio_util::sync::CancellationToken;
 
 use crate::{executor::Task, storage::PostgresClient, types::OplogEvent};
@@ -17,11 +17,11 @@ impl CollectionResumeToken {
 
 pub struct ResumeTokenManager {
     postgres: PostgresClient,
-    receiver: Mutex<broadcast::Receiver<OplogEvent>>,
+    receiver: Mutex<Receiver<OplogEvent>>,
 }
 
 impl ResumeTokenManager {
-    pub fn new(postgres: PostgresClient, receiver: broadcast::Receiver<OplogEvent>) -> Self {
+    pub fn new(postgres: PostgresClient, receiver: Receiver<OplogEvent>) -> Self {
         Self {
             postgres,
             receiver: Mutex::new(receiver),
