@@ -89,7 +89,7 @@ impl SqliteManager {
     pub async fn delete_database(&self, entity_name: &str) -> anyhow::Result<()> {
         info!("Removing cache database for entity: {}", entity_name);
 
-        if let Some(_) = self.dbs.remove(entity_name) {
+        if self.dbs.remove(entity_name).is_some() {
             debug!("Closed connection for entity: {}", entity_name);
         }
 

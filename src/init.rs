@@ -41,7 +41,7 @@ impl Systems {
         let sqlite_manager = Arc::new(SqliteManager::new(&conf.cache.base_dir));
 
         let mongo_client = MongoClient::new(
-            &conf,
+            conf,
             oplog_sender,
             entity_manager.clone(),
             resume_token_manager.clone(),
@@ -61,7 +61,7 @@ impl Systems {
         );
 
         let snapshot_manager = Arc::new(SnapshotManager::new(
-            &conf,
+            conf,
             entity_manager.clone(),
             sqlite_manager.clone(),
         ));

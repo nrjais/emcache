@@ -6,6 +6,8 @@ use std::{
 
 use tempfile::{Builder, NamedTempFile};
 
+pub const SNAPSHOT_DIR: &str = "snapshots";
+
 pub struct Snapshot {
     file: NamedTempFile,
     timestamp: Instant,
@@ -21,7 +23,7 @@ impl Snapshot {
             .prefix(entity_name)
             .suffix("-snap.db")
             .rand_bytes(5)
-            .tempfile_in(format!("{}/snapshots", base_dir))?;
+            .tempfile_in(format!("{base_dir}/{SNAPSHOT_DIR}"))?;
         Ok(Self {
             file,
             timestamp: Instant::now(),

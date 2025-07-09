@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dashmap::DashMap;
+use tokio::fs;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 
@@ -11,7 +12,7 @@ use crate::config::Configs;
 use crate::entity::EntityManager;
 use crate::executor::Task;
 use crate::replicator::sqlite::SqliteManager;
-use crate::snapshot::snapshot_ref::{Snapshot, SnapshotRef};
+use crate::snapshot::snapshot_ref::{SNAPSHOT_DIR, Snapshot, SnapshotRef};
 use crate::types::Entity;
 
 pub struct SnapshotManager {
@@ -50,6 +51,8 @@ impl SnapshotManager {
     }
 
     async fn create_snapshot(&self, entity: &Entity) -> anyhow::Result<SnapshotRef> {
+        fs::create_dir_all(format!("{}/{}", self.base_dir, SNAPSHOT_DIR)).await?;
+
         let snapshot = Snapshot::new(&entity.name, &self.base_dir)?;
 
         self.sqlite_manager.snapshot_to(entity, snapshot.path()).await?;

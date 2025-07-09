@@ -45,12 +45,12 @@ impl ApiServer {
         };
 
         let app = Router::new()
-            .layer(CompressionLayer::new().gzip(true).zstd(true))
             .route("/health", get(health::health_check))
             .route("/health/detailed", get(health::detailed_health_check))
             .merge(entities::router())
             .merge(oplogs::router())
             .merge(snapshot::router())
+            .layer(CompressionLayer::new().gzip(true).zstd(true))
             .with_state(state);
 
         let app = Router::new().nest("/api", app);
