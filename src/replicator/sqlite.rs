@@ -104,11 +104,6 @@ impl SqliteManager {
         Ok(())
     }
 
-    pub async fn snapshot_to(&self, entity: &Entity, snapshot_path: &Path) -> anyhow::Result<i64> {
-        let cache = self.get_or_create_cache(entity).await?;
-        cache.snapshot_to(snapshot_path).await
-    }
-
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         self.dbs.clear();
 

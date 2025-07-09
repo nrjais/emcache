@@ -21,16 +21,7 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn get_entities(State(state): State<AppState>) -> Result<Json<Vec<Entity>>, (StatusCode, Json<JsonValue>)> {
-    match state.entity_manager.get_all_entities().await {
-        Ok(entities) => Ok(Json(entities)),
-        Err(e) => {
-            error!("Failed to get entities: {}", e);
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Failed to get entities" })),
-            ))
-        }
-    }
+    Ok(Json(state.entity_manager.get_all_entities()))
 }
 
 async fn create_entity(

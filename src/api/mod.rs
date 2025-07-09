@@ -46,7 +46,6 @@ impl ApiServer {
 
         let app = Router::new()
             .route("/health", get(health::health_check))
-            .route("/health/detailed", get(health::detailed_health_check))
             .merge(entities::router())
             .merge(oplogs::router())
             .merge(snapshot::router())

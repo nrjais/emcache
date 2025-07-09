@@ -37,13 +37,13 @@ impl EntityManager {
         Ok(())
     }
 
-    pub async fn get_all_entities(&self) -> anyhow::Result<Vec<Entity>> {
+    pub fn get_all_entities(&self) -> Vec<Entity> {
         let mut entities = vec![];
         for entity in self.cache.iter() {
             entities.push(entity.value().clone());
         }
 
-        Ok(entities)
+        entities
     }
 
     pub async fn refresh_entities(&self) -> anyhow::Result<Vec<Entity>> {

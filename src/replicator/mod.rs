@@ -11,7 +11,7 @@ use crate::{
     types::Oplog,
 };
 
-mod cache;
+pub mod cache;
 mod database;
 pub mod metadata;
 mod migrator;
@@ -109,7 +109,7 @@ impl Replicator {
 
         for (entity_name, oplogs) in grouped_oplogs {
             for oplog in &oplogs {
-                max_processed_id = max_processed_id.max(oplog.id);
+                max_processed_id = max_processed_id.max(oplog.id as i64);
             }
 
             self.apply_entity_oplogs(&entity_name, oplogs).await?;

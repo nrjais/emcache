@@ -2,7 +2,7 @@ use std::{
     path::Path,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicI64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -23,7 +23,7 @@ const LAST_PROCESSED_ID_KEY: &str = "last_processed_id";
 pub struct LocalCache {
     db: Arc<Mutex<Connection>>,
     entity: Entity,
-    last_processed_id: Arc<AtomicI64>,
+    last_processed_id: Arc<AtomicU64>,
 }
 
 impl LocalCache {
@@ -31,7 +31,7 @@ impl LocalCache {
         Self {
             db,
             entity,
-            last_processed_id: Arc::new(AtomicI64::new(0)),
+            last_processed_id: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -45,12 +45,12 @@ impl LocalCache {
         Ok(())
     }
 
-    fn load_last_processed_id(&self) -> anyhow::Result<i64> {
+    fn load_last_processed_id(&self) -> anyhow::Result<u64> {
         let conn = self.db.lock().unwrap();
         let query = format!("SELECT value FROM {METADATA_TABLE} WHERE key = ?");
 
         let mut stmt = conn.prepare(&query)?;
-        let result: Result<i64, rusqlite::Error> = stmt.query_row(params![LAST_PROCESSED_ID_KEY], |row| row.get(0));
+        let result: Result<u64, rusqlite::Error> = stmt.query_row(params![LAST_PROCESSED_ID_KEY], |row| row.get(0));
 
         match result {
             Ok(value) => Ok(value),
@@ -82,7 +82,7 @@ impl LocalCache {
                 }
             }
             processed_count += 1;
-            max_processed_id = max_processed_id.max(oplog.id);
+            max_processed_id = max_processed_id.max(oplog.id as u64);
         }
 
         self.set_last_processed_id(&tx, max_processed_id)?;
@@ -121,7 +121,7 @@ impl LocalCache {
         Ok(())
     }
 
-    fn set_last_processed_id(&self, tx: &Transaction, last_processed_id: i64) -> anyhow::Result<()> {
+    fn set_last_processed_id(&self, tx: &Transaction, last_processed_id: u64) -> anyhow::Result<()> {
         let query = format!(
             "INSERT INTO {METADATA_TABLE} (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         );
@@ -131,12 +131,16 @@ impl LocalCache {
         Ok(())
     }
 
-    pub async fn snapshot_to(&self, snapshot_path: &Path) -> anyhow::Result<i64> {
+    pub fn snapshot_to(&self, snapshot_path: &Path) -> anyhow::Result<u64> {
         let conn = self.db.lock().unwrap();
         let mut dst = Connection::open(snapshot_path)?;
         let backup = Backup::new(&conn, &mut dst)?;
         backup.run_to_completion(1000, Duration::from_micros(1), None)?;
 
         Ok(self.last_processed_id.load(Ordering::Relaxed))
+    }
+
+    pub fn last_processed_id(&self) -> u64 {
+        self.last_processed_id.load(Ordering::Relaxed)
     }
 }
