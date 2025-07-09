@@ -1,3 +1,5 @@
+use anyhow::Context;
+
 use crate::{storage::PostgresClient, types::Oplog};
 
 pub struct OplogDatabase {
@@ -17,7 +19,8 @@ impl OplogDatabase {
             limit
         )
         .fetch_all(self.client.postgres())
-        .await?;
+        .await
+        .context("Failed to get oplogs")?;
 
         Ok(rows)
     }

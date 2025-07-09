@@ -36,18 +36,16 @@ impl MetadataDb {
     pub fn set_last_processed_id(&self, last_processed_id: i64) -> anyhow::Result<()> {
         let conn = self.db.lock().unwrap();
         let query = format!(
-            "INSERT INTO {META_TABLE_NAME} (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?"
+            "INSERT INTO {META_TABLE_NAME} (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         );
 
-        conn.execute(&query, params![LAST_PROCESSED_ID, last_processed_id, last_processed_id])?;
+        conn.execute(&query, params![LAST_PROCESSED_ID, last_processed_id])?;
         Ok(())
     }
 
     pub fn init(&self) -> anyhow::Result<()> {
         let conn = self.db.lock().unwrap();
-        let query = format!(
-            "CREATE TABLE IF NOT EXISTS {META_TABLE_NAME} (key TEXT PRIMARY KEY, value ANY) STRICT"
-        );
+        let query = format!("CREATE TABLE IF NOT EXISTS {META_TABLE_NAME} (key TEXT PRIMARY KEY, value ANY) STRICT");
         conn.execute(&query, [])?;
         Ok(())
     }

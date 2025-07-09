@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use anyhow::Context;
 use rusqlite::{Connection, Transaction, backup::Backup, params};
 use tracing::debug;
 
@@ -85,7 +86,7 @@ impl LocalCache {
         }
 
         self.set_last_processed_id(&tx, max_processed_id)?;
-        tx.commit()?;
+        tx.commit().context("Failed to commit transaction")?;
 
         debug!(
             "Successfully applied {} oplogs for entity {}",
@@ -100,7 +101,8 @@ impl LocalCache {
     fn apply_upsert(tx: &Transaction, entity: &Entity, oplog: &Oplog) -> anyhow::Result<()> {
         let query = format!("INSERT OR REPLACE INTO {DATA_TABLE} (id, data) VALUES (?1, ?2)");
 
-        tx.execute(&query, params![&oplog.doc_id, &serde_json::to_string(&oplog.data)?,])?;
+        tx.execute(&query, params![&oplog.doc_id, &serde_json::to_string(&oplog.data)?,])
+            .context("Failed to apply upsert")?;
 
         debug!("Applied upsert for doc_id {} in entity {}", oplog.doc_id, entity.name);
         Ok(())
@@ -108,7 +110,9 @@ impl LocalCache {
 
     fn apply_delete(tx: &Transaction, entity: &Entity, oplog: &Oplog) -> anyhow::Result<()> {
         let query = format!("DELETE FROM {DATA_TABLE} WHERE id = ?1");
-        let rows_affected = tx.execute(&query, params![&oplog.doc_id])?;
+        let rows_affected = tx
+            .execute(&query, params![&oplog.doc_id])
+            .context("Failed to apply delete")?;
 
         debug!(
             "Applied delete for doc_id {} in entity {} (rows affected: {})",
@@ -122,7 +126,8 @@ impl LocalCache {
             "INSERT INTO {METADATA_TABLE} (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         );
 
-        tx.execute(&query, params![LAST_PROCESSED_ID_KEY, last_processed_id])?;
+        tx.execute(&query, params![LAST_PROCESSED_ID_KEY, last_processed_id])
+            .context("Failed to set last processed id")?;
         Ok(())
     }
 

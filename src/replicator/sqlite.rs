@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use anyhow::Context;
 use dashmap::DashMap;
 use rusqlite::Connection;
 use tokio::fs;
@@ -38,23 +39,43 @@ impl SqliteManager {
         let db_path = self.get_db_path(entity)?;
 
         if let Some(parent) = db_path.parent() {
-            fs::create_dir_all(parent).await?;
+            fs::create_dir_all(parent).await.context("Failed to create directory")?;
         }
 
-        let connection = Connection::open(&db_path)?;
+        let connection = Connection::open(&db_path).context("Failed to open SQLite database")?;
 
-        connection.execute("PRAGMA journal_mode = WAL", [])?;
-        connection.execute("PRAGMA synchronous = NORMAL", [])?;
-        connection.execute("PRAGMA cache_size = 1000", [])?;
-        connection.execute("PRAGMA temp_store = MEMORY", [])?;
+        self.configure_sqlite_connection(&connection)?;
 
         let connection = Arc::new(Mutex::new(connection));
 
         debug!("Created SQLite database at: {}", db_path.display());
         let local_cache = LocalCache::new(connection, entity.clone());
-        local_cache.init().await?;
+        local_cache
+            .init()
+            .await
+            .context("Failed to initialize SQLite database")?;
 
         Ok(local_cache)
+    }
+
+    fn configure_sqlite_connection(&self, connection: &Connection) -> anyhow::Result<()> {
+        connection
+            .pragma_update(None, "journal_mode", "WAL")
+            .map_err(|e| anyhow::anyhow!("Failed to set journal mode: {}", e))?;
+        connection
+            .pragma_update(None, "wal_autocheckpoint", 1000)
+            .map_err(|e| anyhow::anyhow!("Failed to set WAL autocheckpoint: {}", e))?;
+        connection
+            .pragma_update(None, "synchronous", "NORMAL")
+            .map_err(|e| anyhow::anyhow!("Failed to set synchronous mode: {}", e))?;
+        connection
+            .pragma_update(None, "cache_size", 1000)
+            .map_err(|e| anyhow::anyhow!("Failed to set cache size: {}", e))?;
+        connection
+            .pragma_update(None, "temp_store", "MEMORY")
+            .map_err(|e| anyhow::anyhow!("Failed to set temp store: {}", e))?;
+
+        Ok(())
     }
 
     fn get_db_path(&self, entity: &Entity) -> anyhow::Result<std::path::PathBuf> {
@@ -74,7 +95,9 @@ impl SqliteManager {
 
         let entity_dir = Path::new(&self.base_dir).join(entity_name);
         if entity_dir.exists() {
-            fs::remove_dir_all(&entity_dir).await?;
+            fs::remove_dir_all(&entity_dir)
+                .await
+                .context("Failed to remove directory")?;
             info!("Deleted cache database directory: {}", entity_dir.display());
         }
 
