@@ -19,7 +19,7 @@ use crate::snapshot::snapshot_ref::{SNAPSHOT_DIR, SnapshotRef};
 use crate::types::Entity;
 
 struct Snapshot {
-    file_ref: SnapshotRef,
+    guard: SnapshotRef,
     last_processed_id: u64,
     cache: LocalCache,
 }
@@ -53,13 +53,13 @@ impl SnapshotManager {
     }
 
     pub async fn snapshot(&self, entity_name: &str) -> anyhow::Result<File> {
-        let entity = self
-            .entity_manager
-            .get_entity(entity_name)
-            .ok_or(anyhow::anyhow!("Entity not found"))?;
+        let entity = self.entity_manager.get_entity_force_refresh(entity_name).await?;
+        let Some(entity) = entity else {
+            return Err(anyhow::anyhow!("Entity not found"));
+        };
 
         if let Some(snapshot) = self.snapshots.get(&entity.name) {
-            return snapshot.value().file_ref.open();
+            return snapshot.value().guard.open();
         }
 
         self.create_snapshot(&entity).await
@@ -73,7 +73,7 @@ impl SnapshotManager {
         self.snapshots.insert(
             entity.name.clone(),
             Snapshot {
-                file_ref: snapshot,
+                guard: snapshot,
                 last_processed_id,
                 cache,
             },
@@ -111,7 +111,7 @@ impl SnapshotManager {
                     continue;
                 };
                 snapshot.last_processed_id = last_processed_id;
-                snapshot.file_ref = snapshot_ref;
+                snapshot.guard = snapshot_ref;
             }
         }
     }

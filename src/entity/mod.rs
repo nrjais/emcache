@@ -69,6 +69,14 @@ impl EntityManager {
         self.cache.get(name).map(|e| e.value().clone())
     }
 
+    pub async fn get_entity_force_refresh(&self, name: &str) -> anyhow::Result<Option<Entity>> {
+        if let Some(entity) = self.get_entity(name) {
+            return Ok(Some(entity));
+        }
+        self.refresh_entities().await?;
+        Ok(self.get_entity(name))
+    }
+
     pub async fn delete_entity(&self, name: &str) -> anyhow::Result<()> {
         self.db.delete_entity(name).await?;
         self.cache.remove(name);
