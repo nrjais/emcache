@@ -49,7 +49,7 @@ impl Replicator {
         info!("Starting cache replication loop");
 
         let mut interval = tokio::time::interval(self.interval);
-        let mut last_processed_id = 0;
+        let mut last_processed_id = self.meta.get_last_processed_id()?;
 
         loop {
             tokio::select! {
@@ -58,7 +58,10 @@ impl Replicator {
                     break;
                 }
                 _ = interval.tick() => {
-                    self.tick(&mut last_processed_id).await;
+                    let processed = self.tick(&mut last_processed_id).await;
+                    if processed {
+                        interval.reset_immediately();
+                    }
                 }
             }
         }
@@ -68,28 +71,25 @@ impl Replicator {
         Ok(())
     }
 
-    async fn tick(&self, last_processed_id: &mut i64) {
+    async fn tick(&self, last_processed_id: &mut i64) -> bool {
         let result = self.process_oplog_batch(*last_processed_id).await;
 
         let max_processed_id = match result {
             Ok(max_processed_id) => max_processed_id,
             Err(e) => {
                 error!("Failed to process oplog batch: {}", e);
-                sleep(self.interval).await;
-                return;
+                return false;
             }
         };
 
         let max_processed_id = max_processed_id.max(*last_processed_id);
         let count = max_processed_id - *last_processed_id;
+        *last_processed_id = max_processed_id;
 
-        if count > 0 {
-            info!("Processed {} oplogs, last processed id: {}", count, max_processed_id);
-            let _ = self.update_last_processed_id(max_processed_id).await;
-            *last_processed_id = max_processed_id;
-        } else {
-            sleep(self.interval).await;
-        }
+        let _ = self.update_last_processed_id(max_processed_id).await;
+        info!("Processed {} oplogs, last processed id: {}", count, max_processed_id);
+
+        count > 0
     }
 
     async fn process_oplog_batch(&self, last_processed_id: i64) -> anyhow::Result<i64> {
