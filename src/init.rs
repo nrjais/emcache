@@ -40,13 +40,8 @@ impl Systems {
         let resume_token_manager = Arc::new(ResumeTokenManager::new(postgres_client.clone(), oplog_ack_receiver));
         let sqlite_manager = Arc::new(SqliteManager::new(&conf.cache.base_dir));
 
-        let mongo_client = MongoClient::new(
-            conf,
-            oplog_sender,
-            entity_manager.clone(),
-            resume_token_manager.clone(),
-        )
-        .await?;
+        let mongo_client =
+            MongoClient::new(conf, oplog_sender, entity_manager.clone(), resume_token_manager.clone()).await?;
 
         let metadata_db = MetadataDb::new(&conf.cache.base_dir)?;
 
