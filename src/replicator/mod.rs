@@ -57,7 +57,7 @@ impl Replicator {
                     break;
                 }
                 _ = interval.tick() => {
-                    let processed = self.tick(&mut last_processed_id).await;
+                    let processed = self.poll_next(&mut last_processed_id).await;
                     if processed {
                         interval.reset_immediately();
                     }
@@ -70,7 +70,7 @@ impl Replicator {
         Ok(())
     }
 
-    async fn tick(&self, last_processed_id: &mut i64) -> bool {
+    async fn poll_next(&self, last_processed_id: &mut i64) -> bool {
         let result = self.process_oplog_batch(*last_processed_id).await;
 
         let max_processed_id = match result {

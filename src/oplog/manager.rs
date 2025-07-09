@@ -4,7 +4,7 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{error, info};
 
 use crate::executor::Task;
 use crate::storage::PostgresClient;
@@ -63,7 +63,8 @@ impl Task for OplogManager {
                     info!("Oplog from, first: {:?}, last: {:?}", oplogs[0].from, last_oplog.from);
 
                     self.processor.flush_batch(oplogs).await?;
-                    let _ = self.ack_sender.send(last_oplog);
+                    self.ack_sender.send(last_oplog)
+                        .inspect_err(|e| error!("Failed to send oplog ack: {}", e))?;
                 }
                 _ = cancellation_token.cancelled() => {
                     info!("Oplog manager cancelled");

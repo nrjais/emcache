@@ -42,12 +42,12 @@ impl ResumeTokenManager {
 
     pub async fn save(&self, entity: &str, data: &serde_json::Value) -> Result<(), anyhow::Error> {
         let _ = sqlx::query!(
-        "INSERT INTO mongo_resume_tokens (entity, token_data) VALUES ($1, $2) ON CONFLICT (entity) DO UPDATE SET token_data = $2",
-        entity,
-        data
-    )
-    .execute(self.postgres.postgres())
-    .await?;
+            "INSERT INTO mongo_resume_tokens (entity, token_data) VALUES ($1, $2) ON CONFLICT (entity) DO UPDATE SET token_data = $2",
+            entity,
+            data
+        )
+        .execute(self.postgres.postgres())
+        .await?;
         Ok(())
     }
 
@@ -77,7 +77,9 @@ impl Task for ResumeTokenManager {
         "resume_token".to_string()
     }
 
-    fn execute(&self, cancellation_token: CancellationToken) -> impl Future<Output = anyhow::Result<()>> + Send {
-        self.start(cancellation_token)
+    async fn execute(&self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
+        loop {
+            self.start(cancellation_token.clone()).await?;
+        }
     }
 }
