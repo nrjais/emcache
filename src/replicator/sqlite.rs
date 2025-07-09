@@ -63,13 +63,13 @@ impl SqliteManager {
             .pragma_update(None, "journal_mode", "WAL")
             .map_err(|e| anyhow::anyhow!("Failed to set journal mode: {}", e))?;
         connection
-            .pragma_update(None, "wal_autocheckpoint", 1000)
+            .pragma_update(None, "wal_autocheckpoint", 8)
             .map_err(|e| anyhow::anyhow!("Failed to set WAL autocheckpoint: {}", e))?;
         connection
             .pragma_update(None, "synchronous", "NORMAL")
             .map_err(|e| anyhow::anyhow!("Failed to set synchronous mode: {}", e))?;
         connection
-            .pragma_update(None, "cache_size", 1000)
+            .pragma_update(None, "cache_size", 64)
             .map_err(|e| anyhow::anyhow!("Failed to set cache size: {}", e))?;
         connection
             .pragma_update(None, "temp_store", "MEMORY")
