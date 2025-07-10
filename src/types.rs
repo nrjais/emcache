@@ -73,7 +73,6 @@ pub struct Column {
     pub name: String,
     #[serde(rename = "type")]
     pub typ: DataType,
-    pub nullable: bool,
     pub path: String,
 }
 

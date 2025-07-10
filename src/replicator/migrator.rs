@@ -8,7 +8,7 @@ pub const METADATA_TABLE: &str = "metadata";
 
 fn sqlite_type(typ: DataType) -> String {
     match typ {
-        DataType::Jsonb => "TEXT".to_string(),
+        DataType::Jsonb => "JSONB".to_string(),
         DataType::Any => "TEXT".to_string(),
         DataType::Bool => "INTEGER".to_string(),
         DataType::Number => "REAL".to_string(),
@@ -41,10 +41,7 @@ fn create_tables(conn: &Connection, shape: &Shape) -> Result<(), anyhow::Error> 
     let column_defs = shape
         .columns
         .iter()
-        .map(|c| {
-            let nullable = if c.nullable { "" } else { "NOT NULL" };
-            format!("{} {} {}", quote_name(&c.name), sqlite_type(c.typ), nullable)
-        })
+        .map(|c| format!("{} {}", quote_name(&c.name), sqlite_type(c.typ)))
         .collect::<Vec<String>>();
     let id = format!(
         "{} {} PRIMARY KEY",

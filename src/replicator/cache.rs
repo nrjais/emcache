@@ -8,10 +8,13 @@ use std::{
 };
 
 use anyhow::Context;
-use rusqlite::{Connection, Transaction, backup::Backup, params};
+use rusqlite::{Connection, ToSql, Transaction, backup::Backup, params};
 use tracing::debug;
 
-use crate::replicator::migrator::{DATA_TABLE, METADATA_TABLE};
+use crate::replicator::{
+    mapper::generate_insert_query,
+    migrator::{DATA_TABLE, METADATA_TABLE},
+};
 use crate::{
     replicator::migrator::run_migrations,
     types::{Entity, Operation, Oplog},
@@ -99,9 +102,10 @@ impl LocalCache {
     }
 
     fn apply_upsert(tx: &Transaction, entity: &Entity, oplog: &Oplog) -> anyhow::Result<()> {
-        let query = format!("INSERT OR REPLACE INTO {DATA_TABLE} (id, data) VALUES (?1, ?2)");
+        let (query, values) = generate_insert_query(entity, &oplog.data)?;
+        let params = values.iter().map(|v| v as &dyn ToSql).collect::<Vec<_>>();
 
-        tx.execute(&query, params![&oplog.doc_id, &serde_json::to_string(&oplog.data)?,])
+        tx.execute(&query, params.as_slice())
             .context("Failed to apply upsert")?;
 
         debug!("Applied upsert for doc_id {} in entity {}", oplog.doc_id, entity.name);

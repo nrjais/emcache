@@ -15,6 +15,7 @@ pub mod cache;
 pub mod metadata;
 mod migrator;
 pub mod sqlite;
+mod mapper;
 
 pub struct Replicator {
     sqlite_manager: Arc<SqliteManager>,
