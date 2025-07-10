@@ -16,8 +16,8 @@ fn extract_data(doc: &bson::Document, shape: &Shape) -> anyhow::Result<Vec<Value
     for column in &shape.columns {
         let path = parse_json_path(&column.path)?;
         let process = js_path_process(&path, &doc)?;
-        let first = process.into_iter().next().unwrap();
-        let value = first.val().clone();
+        let first = process.into_iter().next();
+        let value = first.map(|v| v.val().clone()).unwrap_or(Value::Null);
         data.push(value);
     }
 
