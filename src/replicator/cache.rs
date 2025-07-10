@@ -102,11 +102,11 @@ impl LocalCache {
     }
 
     fn apply_upsert(tx: &Transaction, entity: &Entity, oplog: &Oplog) -> anyhow::Result<()> {
-        let (query, values) = generate_insert_query(entity, &oplog.data)?;
+        let (query, values) = generate_insert_query(entity, &oplog)?;
         let params = values.iter().map(|v| v as &dyn ToSql).collect::<Vec<_>>();
 
         tx.execute(&query, params.as_slice())
-            .context("Failed to apply upsert")?;
+            .map_err(|e| anyhow::anyhow!("Failed to apply upsert: {}, query: {}", e, query))?;
 
         debug!("Applied upsert for doc_id {} in entity {}", oplog.doc_id, entity.name);
         Ok(())

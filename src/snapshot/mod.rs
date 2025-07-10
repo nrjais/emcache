@@ -4,6 +4,7 @@ use std::fs::File;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use dashmap::DashMap;
 use tokio::fs;
 use tokio::time::{MissedTickBehavior, interval};
@@ -46,9 +47,13 @@ impl SnapshotManager {
     }
 
     pub async fn init(&self) -> anyhow::Result<()> {
+        info!("Initializing snapshot manager, creating snapshot directory");
         let snapshot_dir = format!("{}/{}", self.base_dir, SNAPSHOT_DIR);
-        fs::remove_dir_all(&snapshot_dir).await?;
-        fs::create_dir_all(&snapshot_dir).await?;
+        let _ = fs::remove_dir_all(&snapshot_dir).await;
+        fs::create_dir_all(&snapshot_dir)
+            .await
+            .context("Failed to create snapshot directory")?;
+        info!("Snapshot directory created at {}", snapshot_dir);
         Ok(())
     }
 
@@ -102,7 +107,7 @@ impl SnapshotManager {
 
             let latest_offset = snapshot.cache.last_processed_id();
 
-            let lag = snapshot.last_processed_id - latest_offset;
+            let lag = latest_offset.saturating_sub(snapshot.last_processed_id);
 
             if lag > self.min_lag {
                 let result = self.snapshot_for(&entity, &snapshot.cache).await;

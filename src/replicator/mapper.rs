@@ -4,8 +4,12 @@ use rusqlite::{
 };
 use serde_json::Value as JsonValue;
 
-use crate::types::Entity;
+use crate::{
+    replicator::migrator::DATA_TABLE,
+    types::{Entity, Oplog},
+};
 
+#[derive(Debug)]
 pub enum SqlValue {
     Null,
     Bool(bool),
@@ -47,21 +51,19 @@ impl TryFrom<&JsonValue> for SqlValue {
     }
 }
 
-pub fn generate_insert_query<'a>(entity: &Entity, data: &'a JsonValue) -> anyhow::Result<(String, Vec<SqlValue>)> {
+pub fn generate_insert_query<'a>(entity: &Entity, oplog: &'a Oplog) -> anyhow::Result<(String, Vec<SqlValue>)> {
     let mut values = Vec::new();
     let mut placeholders = String::new();
     let mut columns = String::new();
 
-    let id_column = &entity.shape.id_column;
-
-    let id_value = (&data[&id_column.path]).try_into()?;
+    let id_value = SqlValue::String(oplog.doc_id.clone());
 
     values.push(id_value);
     columns.push_str("id");
     placeholders.push_str("?");
 
     for column in entity.shape.columns.iter() {
-        let value = (&data[&column.name]).try_into()?;
+        let value = (&oplog.data[&column.name]).try_into()?;
 
         values.push(value);
 
@@ -73,7 +75,7 @@ pub fn generate_insert_query<'a>(entity: &Entity, data: &'a JsonValue) -> anyhow
 
     let query = format!(
         "INSERT OR REPLACE INTO {} ({}) VALUES ({})",
-        entity.name, columns, placeholders
+        DATA_TABLE, columns, placeholders
     );
 
     Ok((query, values))

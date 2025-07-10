@@ -1,4 +1,5 @@
 use anyhow::{Context, bail};
+use chrono::Utc;
 use mongodb::{
     bson::{self, Bson},
     change_stream::event::{ChangeStreamEvent, OperationType},
@@ -35,7 +36,7 @@ pub fn map_oplog_from_change(
         .full_document
         .map(serde_json::to_value)
         .transpose()?
-        .unwrap_or(serde_json::Value::Null);
+        .unwrap_or(Value::Null);
 
     Ok(Some(OplogEvent {
         oplog: Oplog {
@@ -44,7 +45,7 @@ pub fn map_oplog_from_change(
             doc_id,
             entity: entity.to_string(),
             data,
-            created_at: chrono::Utc::now(),
+            created_at: Utc::now(),
         },
         from: OplogFrom::Live,
         data: resume_token,
@@ -64,7 +65,7 @@ pub fn map_oplog_from_document(document: bson::Document, entity: &str) -> anyhow
             doc_id,
             entity: entity.to_string(),
             data,
-            created_at: chrono::Utc::now(),
+            created_at: Utc::now(),
         },
         from: OplogFrom::Scan,
         data: Value::Null,

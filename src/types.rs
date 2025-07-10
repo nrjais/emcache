@@ -65,6 +65,7 @@ pub enum IdType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdColumn {
     pub path: String,
+    #[serde(rename = "type")]
     pub typ: IdType,
 }
 

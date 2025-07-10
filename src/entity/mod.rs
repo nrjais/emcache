@@ -7,7 +7,7 @@ use dashmap::DashMap;
 use tokio::sync::broadcast;
 use tokio::time::{MissedTickBehavior, interval};
 use tokio_util::sync::CancellationToken;
-use tracing::error;
+use tracing::{error, info};
 
 use crate::entity::database::EntityDatabase;
 use crate::executor::Task;
@@ -33,6 +33,7 @@ impl EntityManager {
     }
 
     pub async fn init(&self) -> anyhow::Result<()> {
+        info!("Initializing entity manager, loading entities from database");
         self.refresh_entities().await?;
         Ok(())
     }
