@@ -44,7 +44,7 @@ pub struct SnapshotRef {
 impl SnapshotRef {
     pub async fn new(entity_name: &str, base_dir: &str) -> anyhow::Result<Self> {
         let now = Utc::now();
-        let time_str = now.format("%H%M").to_string();
+        let time_str = now.format("%Y%m%d-%H%M%S").to_string();
 
         let entity_dir = format!("{base_dir}/{SNAPSHOT_DIR}/{entity_name}");
         create_dir_all(&entity_dir).await?;
