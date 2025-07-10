@@ -14,8 +14,8 @@ fn extract_data(doc: &bson::Document, shape: &Shape) -> anyhow::Result<Vec<Value
     let doc = serde_json::to_value(doc)?;
     let mut data = Vec::new();
     for column in &shape.columns {
-        let path = parse_json_path(&column.path)?;
-        let process = js_path_process(&path, &doc)?;
+        let path = parse_json_path(&column.path).context(format!("Failed to parse path: {}", column.path))?;
+        let process = js_path_process(&path, &doc).context(format!("Failed to process path: {}", column.path))?;
         let first = process.into_iter().next();
         let value = first.map(|v| v.val().clone()).unwrap_or(Value::Null);
         data.push(value);
@@ -72,7 +72,8 @@ pub fn map_oplog_from_document(document: bson::Document, entity: &Entity) -> any
     let doc_id = document.get("_id").context("Document id is not present")?;
     let doc_id = extract_doc_id(doc_id)?;
 
-    let data = extract_data(&document, &entity.shape)?;
+    let data = extract_data(&document, &entity.shape)
+        .context(format!("Failed to extract data for entity: {}", entity.name))?;
 
     Ok(OplogEvent {
         oplog: Oplog {
