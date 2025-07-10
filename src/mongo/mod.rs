@@ -177,7 +177,7 @@ impl MongoClient {
             entity.name, entity.source
         );
 
-        let mut stream = create_change_stream(token_manager, &source_db, &entity.name, &entity.source).await?;
+        let mut stream = create_change_stream(token_manager, &source_db, &entity).await?;
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -228,43 +228,50 @@ impl MongoClient {
 async fn create_change_stream(
     resume_token_manager: Arc<ResumeTokenManager>,
     database: &Database,
-    entity: &str,
-    collection: &str,
+    entity: &Entity,
 ) -> anyhow::Result<Pin<Box<dyn Stream<Item = OplogEvent> + Send>>> {
-    let resume_token = resume_token_manager.fetch(entity).await?;
+    let resume_token = resume_token_manager.fetch(&entity.name).await?;
     let resume_token = resume_token.map(|token| token.token_data());
     let has_resume_token = resume_token.is_some();
 
-    let change_stream = start_stream(database.collection(collection), resume_token, entity.to_string()).await?;
+    let change_stream = start_stream(database.collection(&entity.source), resume_token, entity.clone()).await?;
 
     if has_resume_token {
-        info!("Starting change stream for entity '{}' with resume token", entity);
+        info!("Starting change stream for entity '{}' with resume token", &entity.name);
         Ok(change_stream.boxed())
     } else {
-        info!("Starting change stream for entity '{}' without resume token", entity);
-        let scan_stream = collection_scan(database, entity.to_string(), collection).await?;
+        info!(
+            "Starting change stream for entity '{}' without resume token",
+            &entity.name
+        );
+        let scan_stream = collection_scan(database, entity.clone()).await?;
         Ok(scan_stream.chain(change_stream).boxed())
     }
 }
 
 async fn collection_scan(
     database: &Database,
-    entity: String,
-    collection: &str,
+    entity: Entity,
 ) -> anyhow::Result<impl Stream<Item = OplogEvent> + Send + 'static> {
-    let cursor = database.collection(collection).find(bson::doc! {}).await?;
-    let entity = entity.to_string();
-    info!("Starting collection scan for entity '{}'", entity);
+    let cursor = database.collection(&entity.source).find(bson::doc! {}).await?;
+    info!("Starting collection scan for entity '{}'", &entity.name);
     let stream = cursor
         .map(move |change| shaper::map_oplog_from_document(change.unwrap(), &entity))
-        .filter_map(async move |oplog| oplog.ok());
+        .filter_map(async move |oplog| {
+            if let Ok(oplog) = oplog {
+                Some(oplog)
+            } else {
+                error!("Failed to map oplog for entity: {:?}", oplog);
+                None
+            }
+        });
     Ok(stream)
 }
 
 async fn start_stream(
     collection: Collection<Document>,
     resume_token: Option<ResumeToken>,
-    entity: String,
+    entity: Entity,
 ) -> anyhow::Result<impl Stream<Item = OplogEvent> + Send + 'static> {
     let post_image = FullDocumentType::UpdateLookup;
     let stream = collection
@@ -273,7 +280,7 @@ async fn start_stream(
         .resume_after(resume_token)
         .await?;
 
-    info!("Started change stream for entity '{}'", entity);
+    info!("Started change stream for entity '{}'", &entity.name);
 
     let stream = stream
         .map(move |change| shaper::map_oplog_from_change(change.unwrap(), &entity))

@@ -51,7 +51,7 @@ fn create_tables(conn: &Connection, shape: &Shape) -> Result<(), anyhow::Error> 
 
     let columns = [vec![id], column_defs].concat().join(", ");
 
-    let query = format!("CREATE TABLE IF NOT EXISTS {DATA_TABLE} ({columns}) STRICT");
+    let query = format!("CREATE TABLE IF NOT EXISTS {DATA_TABLE} ({columns})");
     conn.execute(&query, [])?;
 
     let meta = format!("CREATE TABLE IF NOT EXISTS {METADATA_TABLE} (key TEXT PRIMARY KEY, value ANY NOT NULL) STRICT");

@@ -13,6 +13,7 @@ dashmap = "6.1"
 deadpool-postgres = "0.14"
 futures = "0.3"
 futures-batch = "0.6"
+jsonpath-rust = "1.0"
 mongodb = "3.2"
 rusqlite = { version = "0.32", features = [
   "backup",

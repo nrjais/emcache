@@ -62,8 +62,10 @@ pub fn generate_insert_query<'a>(entity: &Entity, oplog: &'a Oplog) -> anyhow::R
     columns.push_str("id");
     placeholders.push_str("?");
 
-    for column in entity.shape.columns.iter() {
-        let value = (&oplog.data[&column.name]).try_into()?;
+    let data = oplog.data.as_array().unwrap();
+
+    for (i, column) in entity.shape.columns.iter().enumerate() {
+        let value = data.get(i).unwrap().try_into()?;
 
         values.push(value);
 

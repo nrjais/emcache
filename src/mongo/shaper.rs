@@ -1,17 +1,32 @@
 use anyhow::{Context, bail};
 use chrono::Utc;
+use jsonpath_rust::{parser::parse_json_path, query::js_path_process};
 use mongodb::{
     bson::{self, Bson},
     change_stream::event::{ChangeStreamEvent, OperationType},
 };
 use serde_json::Value;
-use tracing::debug;
+use tracing::{debug, error};
 
-use crate::types::{Operation, Oplog, OplogEvent, OplogFrom};
+use crate::types::{Entity, Operation, Oplog, OplogEvent, OplogFrom, Shape};
+
+fn extract_data(doc: &bson::Document, shape: &Shape) -> anyhow::Result<Vec<Value>> {
+    let doc = serde_json::to_value(doc)?;
+    let mut data = Vec::new();
+    for column in &shape.columns {
+        let path = parse_json_path(&column.path)?;
+        let process = js_path_process(&path, &doc)?;
+        let first = process.into_iter().next().unwrap();
+        let value = first.val().clone();
+        data.push(value);
+    }
+
+    Ok(data)
+}
 
 pub fn map_oplog_from_change(
     event: ChangeStreamEvent<bson::Document>,
-    entity: &str,
+    entity: &Entity,
 ) -> anyhow::Result<Option<OplogEvent>> {
     let operation = match event.operation_type {
         OperationType::Insert | OperationType::Update | OperationType::Replace => Operation::Upsert,
@@ -34,17 +49,18 @@ pub fn map_oplog_from_change(
 
     let data = event
         .full_document
-        .map(serde_json::to_value)
-        .transpose()?
-        .unwrap_or(Value::Null);
+        .map(|doc| extract_data(&doc, &entity.shape))
+        .transpose()
+        .inspect_err(|e| error!("Failed to extract data for entity '{}': {}", entity.name, e))?
+        .unwrap_or_default();
 
     Ok(Some(OplogEvent {
         oplog: Oplog {
             id: 0,
             operation,
             doc_id,
-            entity: entity.to_string(),
-            data,
+            entity: entity.name.clone(),
+            data: Value::Array(data),
             created_at: Utc::now(),
         },
         from: OplogFrom::Live,
@@ -52,19 +68,19 @@ pub fn map_oplog_from_change(
     }))
 }
 
-pub fn map_oplog_from_document(document: bson::Document, entity: &str) -> anyhow::Result<OplogEvent> {
+pub fn map_oplog_from_document(document: bson::Document, entity: &Entity) -> anyhow::Result<OplogEvent> {
     let doc_id = document.get("_id").context("Document id is not present")?;
     let doc_id = extract_doc_id(doc_id)?;
 
-    let data = serde_json::to_value(document)?;
+    let data = extract_data(&document, &entity.shape)?;
 
     Ok(OplogEvent {
         oplog: Oplog {
             id: 0,
             operation: Operation::Upsert,
             doc_id,
-            entity: entity.to_string(),
-            data,
+            entity: entity.name.clone(),
+            data: Value::Array(data),
             created_at: Utc::now(),
         },
         from: OplogFrom::Scan,
