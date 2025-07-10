@@ -6,13 +6,12 @@ use tracing::{debug, error, info};
 use crate::{
     entity::EntityManager,
     executor::Task,
-    replicator::{database::OplogDatabase, metadata::MetadataDb, sqlite::SqliteManager},
-    storage::PostgresClient,
+    oplog::OplogDatabase,
+    replicator::{metadata::MetadataDb, sqlite::SqliteManager},
     types::Oplog,
 };
 
 pub mod cache;
-mod database;
 pub mod metadata;
 mod migrator;
 pub mod sqlite;
@@ -28,16 +27,16 @@ pub struct Replicator {
 
 impl Replicator {
     pub fn new(
-        postgres_client: PostgresClient,
         entity_manager: Arc<EntityManager>,
         meta: MetadataDb,
+        oplog_db: OplogDatabase,
         sqlite_manager: Arc<SqliteManager>,
         interval: Duration,
     ) -> Self {
         Self {
             meta,
             sqlite_manager,
-            database: OplogDatabase::new(postgres_client),
+            database: oplog_db,
             entity_manager,
             batch_size: 100,
             interval,
@@ -109,7 +108,7 @@ impl Replicator {
 
         for (entity_name, oplogs) in grouped_oplogs {
             for oplog in &oplogs {
-                max_processed_id = max_processed_id.max(oplog.id as i64);
+                max_processed_id = max_processed_id.max(oplog.id);
             }
 
             self.apply_entity_oplogs(&entity_name, oplogs).await?;

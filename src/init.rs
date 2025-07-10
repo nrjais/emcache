@@ -36,7 +36,7 @@ impl Systems {
 
         let (oplog_ack_sender, oplog_ack_receiver) = broadcast::channel(10);
 
-        let (oplog_manager, oplog_sender) = OplogManager::new(postgres_client.clone(), oplog_ack_sender).await?;
+        let (oplog_manager, oplog_sender) = OplogManager::new(oplog_db.clone(), oplog_ack_sender).await?;
         let resume_token_manager = Arc::new(ResumeTokenManager::new(postgres_client.clone(), oplog_ack_receiver));
         let sqlite_manager = Arc::new(SqliteManager::new(&conf.cache.base_dir));
 
@@ -48,9 +48,9 @@ impl Systems {
         entity_manager.init().await?;
 
         let replicator = Replicator::new(
-            postgres_client.clone(),
             entity_manager.clone(),
             metadata_db,
+            oplog_db.clone(),
             sqlite_manager.clone(),
             conf.cache.replication_interval,
         );

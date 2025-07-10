@@ -43,7 +43,7 @@ impl FromStr for Operation {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum DataType {
     Jsonb,
@@ -55,17 +55,39 @@ pub enum DataType {
     Bytes,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum IdType {
+    String,
+    Number,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdColumn {
+    pub path: String,
+    pub typ: IdType,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Column {
     pub name: String,
     #[serde(rename = "type")]
     pub typ: DataType,
+    pub nullable: bool,
     pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Index {
+    pub name: String,
+    pub columns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Shape {
+    pub id_column: IdColumn,
     pub columns: Vec<Column>,
+    pub indexes: Vec<Index>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

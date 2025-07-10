@@ -4,46 +4,52 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::executor::Task;
-use crate::storage::PostgresClient;
 use crate::types::OplogEvent;
 use futures::StreamExt;
 
-use super::processor::OplogProcessor;
+use super::database::OplogDatabase;
 use futures_batch::ChunksTimeoutStreamExt;
 
 pub struct OplogManager {
-    processor: OplogProcessor,
+    db_ops: OplogDatabase,
     event_receiver: Arc<Mutex<Option<mpsc::Receiver<OplogEvent>>>>,
     ack_sender: broadcast::Sender<OplogEvent>,
 }
 
 impl OplogManager {
     pub async fn new(
-        client: PostgresClient,
+        db_ops: OplogDatabase,
         ack_sender: broadcast::Sender<OplogEvent>,
     ) -> Result<(Self, mpsc::Sender<OplogEvent>)> {
-        let processor = OplogProcessor::new(client);
         let (sender, receiver) = mpsc::channel(1000);
 
         let manager = Self {
-            processor,
+            db_ops,
             event_receiver: Arc::new(Mutex::new(Some(receiver))),
             ack_sender,
         };
 
         Ok((manager, sender))
     }
-}
 
-impl Task for OplogManager {
-    fn name(&self) -> String {
-        "oplog-manager".to_string()
+    pub async fn flush_batch(&self, oplogs: Vec<OplogEvent>) -> Result<()> {
+        if oplogs.is_empty() {
+            return Ok(());
+        }
+
+        debug!("Flushing batch of {} oplogs", oplogs.len());
+
+        let oplogs = oplogs.into_iter().map(|oplog| oplog.oplog).collect::<Vec<_>>();
+
+        self.db_ops.insert_to_oplog(oplogs).await?;
+
+        Ok(())
     }
 
-    async fn execute(&self, cancellation_token: CancellationToken) -> Result<()> {
+    async fn process_oplogs(&self, cancellation_token: CancellationToken) -> Result<()> {
         let receiver = {
             let mut guard = self.event_receiver.lock().await;
             guard.take()
@@ -62,7 +68,7 @@ impl Task for OplogManager {
 
                     info!("Oplog from, first: {:?}, last: {:?}", oplogs[0].from, last_oplog.from);
 
-                    self.processor.flush_batch(oplogs).await?;
+                    self.flush_batch(oplogs).await?;
                     self.ack_sender.send(last_oplog)
                         .inspect_err(|e| error!("Failed to send oplog ack: {}", e))?;
                 }
@@ -72,5 +78,15 @@ impl Task for OplogManager {
                 }
             }
         }
+    }
+}
+
+impl Task for OplogManager {
+    fn name(&self) -> String {
+        "oplog-manager".to_string()
+    }
+
+    async fn execute(&self, cancellation_token: CancellationToken) -> Result<()> {
+        self.process_oplogs(cancellation_token).await
     }
 }

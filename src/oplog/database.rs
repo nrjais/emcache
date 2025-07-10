@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tracing::debug;
 
 use crate::storage::PostgresClient;
@@ -38,7 +38,7 @@ impl OplogDatabase {
         Ok(())
     }
 
-    pub async fn get_oplogs(&self, entities: &[String], from: i64, limit: i64) -> Result<Vec<Oplog>> {
+    pub async fn get_oplogs_by_entity(&self, entities: &[String], from: i64, limit: i64) -> Result<Vec<Oplog>> {
         let oplogs = sqlx::query_as!(
             Oplog,
             "SELECT * FROM oplog WHERE id > $1 AND entity = ANY($2) ORDER BY id ASC LIMIT $3",
@@ -49,5 +49,19 @@ impl OplogDatabase {
         .fetch_all(self.client.postgres())
         .await?;
         Ok(oplogs)
+    }
+
+    pub async fn get_oplogs(&self, cursor: i64, limit: i64) -> anyhow::Result<Vec<Oplog>> {
+        let rows = sqlx::query_as!(
+            Oplog,
+            "SELECT * FROM oplog WHERE id > $1 ORDER BY id ASC LIMIT $2",
+            cursor,
+            limit
+        )
+        .fetch_all(self.client.postgres())
+        .await
+        .context("Failed to get oplogs")?;
+
+        Ok(rows)
     }
 }

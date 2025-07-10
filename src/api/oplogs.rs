@@ -23,7 +23,7 @@ async fn get_oplogs(
     let from = params.from.clamp(0, i64::MAX);
     let limit = params.limit.clamp(1, 1000);
 
-    match state.oplog_db.get_oplogs(&params.entities, from, limit).await {
+    match state.oplog_db.get_oplogs_by_entity(&params.entities, from, limit).await {
         Ok(oplogs) => Ok(Json(oplogs)),
         Err(e) => {
             error!("Failed to get oplogs: {:?}, request: {:?}", e, params);
