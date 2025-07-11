@@ -12,9 +12,9 @@ import (
 
 // LocalCache manages individual entity state and operations
 type LocalCache interface {
+	DB() *sql.DB
 	GetLastAppliedOplogIndex(ctx context.Context) (int64, error)
 	ApplyOplogEntries(ctx context.Context, entries []Oplog) error
-	Query(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	Close() error
 }
 
@@ -39,7 +39,6 @@ func openSQLiteDB(dbPath string) (*sql.DB, error) {
 	}
 	db.SetMaxOpenConns(1)
 
-
 	return db, nil
 }
 
@@ -49,6 +48,10 @@ func (e *localCache) Close() error {
 		return e.db.Close()
 	}
 	return nil
+}
+
+func (e *localCache) DB() *sql.DB {
+	return e.db
 }
 
 // GetLastAppliedOplogIndex retrieves the last processed oplog ID from metadata
@@ -184,15 +187,6 @@ func (e *localCache) setLastProcessedID(ctx context.Context, tx *sql.Tx, lastPro
 	)
 	_, err := tx.ExecContext(ctx, query, lastAppliedIdxKey, strconv.FormatInt(lastProcessedID, 10))
 	return err
-}
-
-// Query executes a query on the entity's data table
-func (e *localCache) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	if e.db == nil {
-		return nil, fmt.Errorf("database connection is not available")
-	}
-
-	return e.db.QueryContext(ctx, query, args...)
 }
 
 func quoteIdentifier(name string) string {

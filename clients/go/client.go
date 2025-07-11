@@ -217,9 +217,8 @@ func NewClient(ctx context.Context, config Config) (*Client, error) {
 	return client, nil
 }
 
-// Query executes a read-only SQL query against the specified entity's database.
-// It returns sql.Rows which must be closed by the caller.
-func (c *Client) Query(ctx context.Context, entity string, query string, args ...any) (*sql.Rows, error) {
+// DB executes a function against the specified entity's database.
+func (c *Client) DB(ctx context.Context, entity string) (*sql.DB, error) {
 	state, exists := c.entities[entity]
 	if !exists {
 		return nil, fmt.Errorf("entity '%s' not found", entity)
@@ -229,12 +228,7 @@ func (c *Client) Query(ctx context.Context, entity string, query string, args ..
 		return nil, fmt.Errorf("entity '%s' is not initialized", entity)
 	}
 
-	rows, err := state.entity.Query(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute query on entity '%s': %w", entity, err)
-	}
-
-	return rows, nil
+	return state.entity.DB(), nil
 }
 
 // StartSync begins automatic synchronization with the server.
