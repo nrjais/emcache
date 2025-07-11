@@ -6,8 +6,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +23,15 @@ type MockHTTPClient struct {
 }
 
 func (m *MockHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	return m.doFunc(req)
+}
+
+// MockRoundTripper implements http.RoundTripper for testing
+type MockRoundTripper struct {
+	doFunc func(req *http.Request) (*http.Response, error)
+}
+
+func (m *MockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	return m.doFunc(req)
 }
 
@@ -47,17 +58,8 @@ func (m *MockEntity) Close() error {
 	return m.closeFunc()
 }
 
-type MockDecompression struct {
-	decompressStreamFunc func(reader io.Reader, firstChunk []byte, compression CompressionType, writer io.Writer) error
-}
-
-func (m *MockDecompression) DecompressStream(reader io.Reader, firstChunk []byte, compression CompressionType, writer io.Writer) error {
-	return m.decompressStreamFunc(reader, firstChunk, compression, writer)
-}
-
-func setupTestClient(t *testing.T) (*Client, *MockHTTPClient, *MockDecompression) {
-	mockHTTPClient := &MockHTTPClient{}
-	mockDecompression := &MockDecompression{}
+func setupTestClient(t *testing.T) (*Client, *MockRoundTripper) {
+	mockTransport := &MockRoundTripper{}
 
 	config := Config{
 		ServerURL:    "http://test-server",
@@ -69,12 +71,11 @@ func setupTestClient(t *testing.T) (*Client, *MockHTTPClient, *MockDecompression
 
 	// Create client without entities initially
 	client := &Client{
-		config:        config,
-		entities:      make(map[string]*entityState),
-		colNames:      []string{"test-entity"},
-		lastOplogIdx:  0, // Set to 0 by default
-		httpClient:    mockHTTPClient,
-		decompression: mockDecompression,
+		config:       config,
+		entities:     make(map[string]*entityState),
+		colNames:     []string{"test-entity"},
+		lastOplogIdx: 0, // Set to 0 by default
+		httpClient:   &http.Client{Transport: mockTransport},
 	}
 
 	// Manually add the mock entity
@@ -90,11 +91,11 @@ func setupTestClient(t *testing.T) (*Client, *MockHTTPClient, *MockDecompression
 		entity: mockEntity,
 	}
 
-	return client, mockHTTPClient, mockDecompression
+	return client, mockTransport
 }
 
 func TestNewClientWithDependencies_Success(t *testing.T) {
-	client, _, _ := setupTestClient(t)
+	client, _ := setupTestClient(t)
 
 	assert.NotNil(t, client)
 	assert.Equal(t, int64(0), client.lastOplogIdx)
@@ -180,10 +181,10 @@ func TestInitializeLastOplogIdx_Error(t *testing.T) {
 }
 
 func TestSyncToLatest_Success(t *testing.T) {
-	client, mockHTTPClient, _ := setupTestClient(t)
+	client, mockTransport := setupTestClient(t)
 
 	// Mock the HTTP response for oplogs
-	mockHTTPClient.doFunc = func(req *http.Request) (*http.Response, error) {
+	mockTransport.doFunc = func(req *http.Request) (*http.Response, error) {
 		// Return empty oplog response to simulate no new entries
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -196,10 +197,10 @@ func TestSyncToLatest_Success(t *testing.T) {
 }
 
 func TestSyncToLatest_ErrorGettingEntries(t *testing.T) {
-	client, mockHTTPClient, _ := setupTestClient(t)
+	client, mockTransport := setupTestClient(t)
 
 	// Mock HTTP error
-	mockHTTPClient.doFunc = func(req *http.Request) (*http.Response, error) {
+	mockTransport.doFunc = func(req *http.Request) (*http.Response, error) {
 		return nil, errors.New("network error")
 	}
 
@@ -209,7 +210,7 @@ func TestSyncToLatest_ErrorGettingEntries(t *testing.T) {
 }
 
 func TestQuery_Success(t *testing.T) {
-	client, _, _ := setupTestClient(t)
+	client, _ := setupTestClient(t)
 
 	// Mock successful query
 	mockEntity := client.entities["test-entity"].entity.(*MockEntity)
@@ -222,7 +223,7 @@ func TestQuery_Success(t *testing.T) {
 }
 
 func TestQuery_EntityNotFound(t *testing.T) {
-	client, _, _ := setupTestClient(t)
+	client, _ := setupTestClient(t)
 
 	_, err := client.Query(context.Background(), "non-existent", "SELECT * FROM data")
 	assert.Error(t, err)
@@ -230,7 +231,7 @@ func TestQuery_EntityNotFound(t *testing.T) {
 }
 
 func TestAddEntity_Success(t *testing.T) {
-	client, mockHTTPClient, _ := setupTestClient(t)
+	client, mockTransport := setupTestClient(t)
 
 	shape := &Shape{
 		IdColumn: IdColumn{Path: "id", Type: IdTypeString},
@@ -238,7 +239,7 @@ func TestAddEntity_Success(t *testing.T) {
 	}
 
 	// Mock successful HTTP response
-	mockHTTPClient.doFunc = func(req *http.Request) (*http.Response, error) {
+	mockTransport.doFunc = func(req *http.Request) (*http.Response, error) {
 		entity := Entity{ID: 1, Name: "test-entity"}
 		body, _ := json.Marshal(entity)
 		return &http.Response{
@@ -252,7 +253,7 @@ func TestAddEntity_Success(t *testing.T) {
 }
 
 func TestAddEntity_NilShape(t *testing.T) {
-	client, _, _ := setupTestClient(t)
+	client, _ := setupTestClient(t)
 
 	_, err := client.AddEntity(context.Background(), "test-entity", nil)
 	assert.Error(t, err)
@@ -260,10 +261,10 @@ func TestAddEntity_NilShape(t *testing.T) {
 }
 
 func TestRemoveEntity_Success(t *testing.T) {
-	client, mockHTTPClient, _ := setupTestClient(t)
+	client, mockTransport := setupTestClient(t)
 
 	// Mock successful HTTP response
-	mockHTTPClient.doFunc = func(req *http.Request) (*http.Response, error) {
+	mockTransport.doFunc = func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(bytes.NewReader([]byte(""))),
@@ -275,10 +276,10 @@ func TestRemoveEntity_Success(t *testing.T) {
 }
 
 func TestStartSync_Success(t *testing.T) {
-	client, mockHTTPClient, _ := setupTestClient(t)
+	client, mockTransport := setupTestClient(t)
 
 	// Mock HTTP response for sync
-	mockHTTPClient.doFunc = func(req *http.Request) (*http.Response, error) {
+	mockTransport.doFunc = func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
@@ -293,10 +294,10 @@ func TestStartSync_Success(t *testing.T) {
 }
 
 func TestStartSync_AlreadyStarted(t *testing.T) {
-	client, mockHTTPClient, _ := setupTestClient(t)
+	client, mockTransport := setupTestClient(t)
 
 	// Mock HTTP response
-	mockHTTPClient.doFunc = func(req *http.Request) (*http.Response, error) {
+	mockTransport.doFunc = func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
@@ -316,14 +317,14 @@ func TestStartSync_AlreadyStarted(t *testing.T) {
 }
 
 func TestClose_Success(t *testing.T) {
-	client, _, _ := setupTestClient(t)
+	client, _ := setupTestClient(t)
 
 	err := client.Close()
 	assert.NoError(t, err)
 }
 
 func TestApplyOplogEntries_Success(t *testing.T) {
-	client, _, _ := setupTestClient(t)
+	client, _ := setupTestClient(t)
 
 	mockEntity := client.entities["test-entity"].entity.(*MockEntity)
 	mockEntity.applyOplogEntriesFunc = func(ctx context.Context, entries []Oplog) error {
@@ -336,7 +337,7 @@ func TestApplyOplogEntries_Success(t *testing.T) {
 }
 
 func TestApplyOplogEntries_WithUnknownEntity(t *testing.T) {
-	client, _, _ := setupTestClient(t)
+	client, _ := setupTestClient(t)
 
 	mockEntity := client.entities["test-entity"].entity.(*MockEntity)
 	mockEntity.applyOplogEntriesFunc = func(ctx context.Context, entries []Oplog) error {
@@ -349,4 +350,163 @@ func TestApplyOplogEntries_WithUnknownEntity(t *testing.T) {
 	}
 	_, err := client.applyOplogEntries(context.Background(), entries)
 	assert.NoError(t, err)
+}
+
+// New comprehensive test cases for missing scenarios
+
+func TestConcurrentOperations(t *testing.T) {
+	client, mockTransport := setupTestClient(t)
+
+	// Mock HTTP response
+	mockTransport.doFunc = func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
+		}, nil
+	}
+
+	// Test concurrent sync operations
+	var wg sync.WaitGroup
+	errors := make(chan error, 10)
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := client.SyncOnce(context.Background())
+			if err != nil {
+				errors <- err
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errors)
+
+	// Check for errors
+	for err := range errors {
+		assert.NoError(t, err)
+	}
+}
+
+func TestOplogProcessingConsistentWithBackend(t *testing.T) {
+	client, _ := setupTestClient(t)
+
+	// Test that oplogs are processed in the same order as backend
+	mockEntity := client.entities["test-entity"].entity.(*MockEntity)
+	var processedEntries []Oplog
+
+	mockEntity.applyOplogEntriesFunc = func(ctx context.Context, entries []Oplog) error {
+		processedEntries = append(processedEntries, entries...)
+		return nil
+	}
+
+	// Create oplogs in mixed order but grouped by entity (as backend does)
+	entries := []Oplog{
+		{ID: 1, Entity: "test-entity", Operation: OperationUpsert, DocID: "doc1"},
+		{ID: 3, Entity: "test-entity", Operation: OperationUpsert, DocID: "doc3"},
+		{ID: 2, Entity: "test-entity", Operation: OperationDelete, DocID: "doc2"},
+	}
+
+	_, err := client.applyOplogEntries(context.Background(), entries)
+	assert.NoError(t, err)
+
+	// Verify all entries were processed
+	assert.Len(t, processedEntries, 3)
+	assert.Equal(t, entries, processedEntries)
+}
+
+func TestErrorRecoveryAndRetry(t *testing.T) {
+	client, mockTransport := setupTestClient(t)
+
+	callCount := 0
+	mockTransport.doFunc = func(req *http.Request) (*http.Response, error) {
+		callCount++
+		if callCount == 1 {
+			return nil, errors.New("network error")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
+		}, nil
+	}
+
+	// First call should fail
+	err := client.SyncOnce(context.Background())
+	assert.Error(t, err)
+
+	// Second call should succeed
+	err = client.SyncOnce(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, 2, callCount)
+}
+
+func TestCompressionSupport(t *testing.T) {
+	// Test writeLoop function with different chunk sizes
+	testData := []byte("Hello, World! This is test data for compression.")
+
+	var buf bytes.Buffer
+	err := writeLoop(testData, bytes.NewReader([]byte(" Additional data")), &buf)
+	assert.NoError(t, err)
+
+	expected := "Hello, World! This is test data for compression. Additional data"
+	assert.Equal(t, expected, buf.String())
+}
+
+func TestDecompressionNoneType(t *testing.T) {
+	testData := []byte("uncompressed data")
+	reader := bytes.NewReader(testData)
+
+	var buf bytes.Buffer
+	err := decompressStream(reader, []byte("first chunk "), CompressionNone, &buf)
+	assert.NoError(t, err)
+
+	expected := "first chunk uncompressed data"
+	assert.Equal(t, expected, buf.String())
+}
+
+func TestBatchProcessingLimits(t *testing.T) {
+	client, _ := setupTestClient(t)
+
+	// Test with exact batch size
+	mockEntity := client.entities["test-entity"].entity.(*MockEntity)
+	mockEntity.applyOplogEntriesFunc = func(ctx context.Context, entries []Oplog) error {
+		// Should receive entries in batches per entity
+		assert.LessOrEqual(t, len(entries), client.config.BatchSize)
+		return nil
+	}
+
+	// Create entries for batch processing
+	entries := make([]Oplog, client.config.BatchSize)
+	for i := 0; i < client.config.BatchSize; i++ {
+		entries[i] = Oplog{
+			ID:        int64(i + 1),
+			Entity:    "test-entity",
+			Operation: OperationUpsert,
+			DocID:     fmt.Sprintf("doc%d", i),
+		}
+	}
+
+	_, err := client.applyOplogEntries(context.Background(), entries)
+	assert.NoError(t, err)
+}
+
+func TestMetadataConsistency(t *testing.T) {
+	client, _ := setupTestClient(t)
+
+	// Test that lastOplogIdx is updated correctly
+	mockEntity := client.entities["test-entity"].entity.(*MockEntity)
+	mockEntity.applyOplogEntriesFunc = func(ctx context.Context, entries []Oplog) error {
+		return nil
+	}
+
+	entries := []Oplog{
+		{ID: 5, Entity: "test-entity"},
+		{ID: 10, Entity: "test-entity"},
+		{ID: 3, Entity: "test-entity"}, // Out of order
+	}
+
+	lastIdx, err := client.applyOplogEntries(context.Background(), entries)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(10), lastIdx, "Should return the maximum ID processed")
 }

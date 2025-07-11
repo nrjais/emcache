@@ -30,6 +30,7 @@ package emcache
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -43,26 +44,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/samber/lo"
 	lop "github.com/samber/lo/parallel"
 )
 
-// HTTPClient interface for HTTP operations
-type HTTPClient interface {
-	Do(req *http.Request) (*http.Response, error)
-}
+// CompressionType represents compression types
+type CompressionType int
 
-// ClientInterface defines the interface for the EmCache client
-type ClientInterface interface {
-	Query(ctx context.Context, entityName string, query string, args ...any) (*sql.Rows, error)
-	SyncToLatest(ctx context.Context, limit int) error
-	AddEntity(ctx context.Context, entityName string, shape *Shape) (*Entity, error)
-	RemoveEntity(ctx context.Context, entityName string) error
-	StartDbUpdates() error
-	StopUpdates()
-	Close() error
-}
+const (
+	CompressionNone CompressionType = iota
+	CompressionZstd
+	CompressionGzip
+)
 
 // Operation types for oplog entries
 type Operation string
@@ -162,23 +157,9 @@ type EntityConfig struct {
 	Name string
 }
 
-type ClientConfig struct {
-	ServerURL      string
-	Directory      string
-	Entities       []EntityConfig
-	UpdateInterval time.Duration
-	BatchSize      int32
-}
-
 type entityState struct {
 	config EntityConfig
-	entity EntityInterface
-}
-
-// ClientDependencies holds all the dependencies for the client
-type ClientDependencies struct {
-	HTTPClient    HTTPClient
-	Decompression DecompressionInterface
+	entity LocalCache
 }
 
 type Client struct {
@@ -190,8 +171,7 @@ type Client struct {
 	stopWg       sync.WaitGroup
 
 	// Internal dependencies
-	httpClient    HTTPClient
-	decompression DecompressionInterface
+	httpClient *http.Client
 }
 
 // NewClient creates a new EmCache client with the given configuration.
@@ -200,7 +180,6 @@ func NewClient(ctx context.Context, config Config) (*Client, error) {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	// Set defaults
 	if config.SyncInterval == 0 {
 		config.SyncInterval = 30 * time.Second
 	}
@@ -213,11 +192,10 @@ func NewClient(ctx context.Context, config Config) (*Client, error) {
 	}
 
 	client := &Client{
-		config:        config,
-		entities:      make(map[string]*entityState),
-		colNames:      config.Collections,
-		httpClient:    httpClient,
-		decompression: NewDecompressionAdapter(),
+		config:     config,
+		entities:   make(map[string]*entityState),
+		colNames:   config.Collections,
+		httpClient: httpClient,
 	}
 
 	if err := client.initialize(ctx); err != nil {
@@ -462,10 +440,10 @@ func (c *Client) initializeEntity(ctx context.Context, entityName string, entiti
 // validateConfig validates the client configuration
 func validateConfig(config Config) error {
 	if config.ServerURL == "" {
-		return fmt.Errorf("ServerURL is required")
+		return fmt.Errorf("server URL is required")
 	}
 	if config.Directory == "" {
-		return fmt.Errorf("Directory is required")
+		return fmt.Errorf("directory is required")
 	}
 	if len(config.Collections) == 0 {
 		return fmt.Errorf("at least one collection must be specified")
@@ -625,15 +603,11 @@ func (c *Client) addEntityInternal(ctx context.Context, entityConfig EntityConfi
 		return nil, fmt.Errorf("failed to open database for entity '%s': %w", entityConfig.Name, err)
 	}
 
-	// Get the database version
-	version, err := getDbVersion(ctx, db)
-	if err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("failed to get database version for entity '%s': %w", entityConfig.Name, err)
+	// Create the SQLite entity
+	entity := &localCache{
+		db:      db,
+		details: entityDetails,
 	}
-
-	// Create the entity adapter
-	entity := NewEntityAdapter(db, version, entityDetails)
 
 	return &entityState{
 		config: entityConfig,
@@ -660,19 +634,6 @@ func (c *Client) downloadDb(ctx context.Context, dbPath string, entityConfig Ent
 	return c.downloadDbForEntity(ctx, entityConfig.Name, file)
 }
 
-// close closes all collection connections and returns the first error encountered
-func (c *Client) close() error {
-	var firstErr error
-	for name, state := range c.entities {
-		if state.entity != nil {
-			if err := state.entity.Close(); err != nil && firstErr == nil {
-				firstErr = fmt.Errorf("failed to close entity %s: %w", name, err)
-			}
-		}
-	}
-	return firstErr
-}
-
 func (c *Client) downloadDbForEntity(ctx context.Context, entityName string, writer io.WriteCloser) (int64, error) {
 	defer writer.Close()
 
@@ -681,6 +642,8 @@ func (c *Client) downloadDbForEntity(ctx context.Context, entityName string, wri
 	if err != nil {
 		return 0, fmt.Errorf("failed to create request: %w", err)
 	}
+
+	req.Header.Set("Accept-Encoding", "zstd, gzip")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -692,15 +655,25 @@ func (c *Client) downloadDbForEntity(ctx context.Context, entityName string, wri
 		return 0, fmt.Errorf("failed to download database: HTTP %d", resp.StatusCode)
 	}
 
-	// Read the first chunk to determine compression type
+	compression := CompressionNone
+	if contentEncoding := resp.Header.Get("Content-Encoding"); contentEncoding != "" {
+		switch contentEncoding {
+		case "gzip":
+			compression = CompressionGzip
+		case "zstd":
+			compression = CompressionZstd
+		default:
+			compression = CompressionNone
+		}
+	}
+
 	firstChunk := make([]byte, 512)
 	n, err := resp.Body.Read(firstChunk)
 	if err != nil && err != io.EOF {
 		return 0, fmt.Errorf("failed to read first chunk: %w", err)
 	}
 
-	// For now, assume no compression - in a full implementation, you'd detect compression type
-	return 0, c.decompression.DecompressStream(resp.Body, firstChunk[:n], CompressionNone, writer)
+	return 0, decompressStream(resp.Body, firstChunk[:n], compression, writer)
 }
 
 func (c *Client) getOplogEntries(ctx context.Context, entityNames []string, afterIndex int64) ([]Oplog, error) {
@@ -734,4 +707,138 @@ func (c *Client) getOplogEntries(ctx context.Context, entityNames []string, afte
 	}
 
 	return entries, nil
+}
+
+func decompressStream(
+	reader io.Reader,
+	firstChunk []byte,
+	compression CompressionType,
+	writer io.Writer,
+) error {
+	switch compression {
+	case CompressionZstd:
+		return decompressZstdStream(reader, firstChunk, writer)
+	case CompressionGzip:
+		return decompressGzipStream(reader, firstChunk, writer)
+	case CompressionNone:
+		if err := writeLoop(firstChunk, reader, writer); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return fmt.Errorf("failed to write chunks: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported compression type %d", compression)
+	}
+}
+
+func writeLoop(firstChunk []byte, reader io.Reader, writer io.Writer) error {
+	if len(firstChunk) > 0 {
+		if _, err := writer.Write(firstChunk); err != nil {
+			return fmt.Errorf("failed to write first uncompressed chunk: %w", err)
+		}
+	}
+
+	_, err := io.Copy(writer, reader)
+	if err != nil {
+		return fmt.Errorf("failed to copy data: %w", err)
+	}
+
+	return nil
+}
+
+func decompressGzipStream(reader io.Reader, firstChunk []byte, writer io.Writer) error {
+	pr, pw := io.Pipe()
+	copyErrChan := make(chan error, 1)
+	feedErrChan := make(chan error, 1)
+
+	go func() {
+		defer pr.Close()
+		gr, err := gzip.NewReader(pr)
+		if err != nil {
+			copyErrChan <- fmt.Errorf("failed to create gzip reader: %w", err)
+			return
+		}
+		defer gr.Close()
+
+		_, copyErr := io.Copy(writer, gr)
+		if copyErr != nil {
+			copyErrChan <- fmt.Errorf("gzip decompression write failed: %w", copyErr)
+		} else {
+			copyErrChan <- nil
+		}
+	}()
+
+	go func() {
+		defer pw.Close()
+		if err := writeLoop(firstChunk, reader, pw); err != nil {
+			if err == io.EOF {
+				feedErrChan <- nil
+			} else {
+				feedErrChan <- err
+			}
+		} else {
+			feedErrChan <- nil
+		}
+	}()
+
+	feedErr := <-feedErrChan
+	copyErr := <-copyErrChan
+
+	if feedErr != nil {
+		return feedErr
+	}
+	if copyErr != nil {
+		return copyErr
+	}
+
+	return nil
+}
+
+func decompressZstdStream(reader io.Reader, firstChunk []byte, writer io.Writer) error {
+	pr, pw := io.Pipe()
+	copyErrChan := make(chan error, 1)
+	feedErrChan := make(chan error, 1)
+
+	zr, err := zstd.NewReader(pr)
+	if err != nil {
+		return fmt.Errorf("failed to create zstd reader: %w", err)
+	}
+	defer zr.Close()
+
+	go func() {
+		defer pr.Close()
+		_, copyErr := io.Copy(writer, zr)
+		if copyErr != nil {
+			copyErrChan <- fmt.Errorf("decompression write failed: %w", copyErr)
+		} else {
+			copyErrChan <- nil
+		}
+	}()
+
+	go func() {
+		defer pw.Close()
+		if err := writeLoop(firstChunk, reader, pw); err != nil {
+			if err == io.EOF {
+				feedErrChan <- nil
+			} else {
+				feedErrChan <- err
+			}
+		} else {
+			feedErrChan <- nil
+		}
+	}()
+
+	feedErr := <-feedErrChan
+	copyErr := <-copyErrChan
+
+	if feedErr != nil {
+		return feedErr
+	}
+	if copyErr != nil {
+		return copyErr
+	}
+
+	return nil
 }

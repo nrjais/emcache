@@ -10,25 +10,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// SQLiteDBInterface wraps the sql.DB operations
-type SQLiteDBInterface interface {
-	Close() error
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	BeginTx(ctx context.Context, opts *sql.TxOptions) (TxInterface, error)
-	Exec(query string, args ...any) (sql.Result, error)
-}
-
-// TxInterface wraps the sql.Tx operations
-type TxInterface interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	Commit() error
-	Rollback() error
-}
-
-// EntityInterface manages individual entity state and operations
-type EntityInterface interface {
+// LocalCache manages individual entity state and operations
+type LocalCache interface {
 	GetLastAppliedOplogIndex(ctx context.Context) (int64, error)
 	ApplyOplogEntries(ctx context.Context, entries []Oplog) error
 	Query(ctx context.Context, query string, args ...any) (*sql.Rows, error)
@@ -37,59 +20,45 @@ type EntityInterface interface {
 
 const (
 	metadataTableName = "metadata"
-	lastAppliedIdxKey = "last_processed_id" // Consistent with server metadata key
-	dbVersionKey      = "db_version"
+	lastAppliedIdxKey = "last_processed_id"
+)
+const (
+	dataTableName = "data"
+	pkColumn      = "id"
 )
 
-type sqliteEntity struct {
-	db      SQLiteDBInterface
-	version int32
+type localCache struct {
+	db      *sql.DB
 	details *Entity
 }
 
-func openSQLiteDB(dbPath string) (SQLiteDBInterface, error) {
+func openSQLiteDB(dbPath string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite db (%s): %w", dbPath, err)
 	}
 	db.SetMaxOpenConns(1)
 
-	// Wrap the *sql.DB in an adapter
-	adapter := &SQLiteDBAdapter{db: db}
 
-	// Initialize metadata table if it doesn't exist
-	if err := initMetadataTable(adapter); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("failed to initialize metadata table: %w", err)
-	}
-
-	return adapter, nil
+	return db, nil
 }
 
-// initMetadataTable creates the metadata table for storing entity state
-func initMetadataTable(db SQLiteDBInterface) error {
-	// Use STRICT table consistent with server metadata table
-	createTableSQL := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (key TEXT PRIMARY KEY, value ANY NOT NULL) STRICT`, metadataTableName)
-	_, err := db.Exec(createTableSQL)
-	return err
-}
-
-// close closes the SQLite database connection
-func (sc *sqliteEntity) close() error {
-	if sc.db != nil {
-		return sc.db.Close()
+// Close closes the SQLite database connection
+func (e *localCache) Close() error {
+	if e.db != nil {
+		return e.db.Close()
 	}
 	return nil
 }
 
-// getLastAppliedOplogIndex retrieves the last processed oplog ID from metadata
-func (sc *sqliteEntity) getLastAppliedOplogIndex(ctx context.Context) (int64, error) {
-	if sc.db == nil {
+// GetLastAppliedOplogIndex retrieves the last processed oplog ID from metadata
+func (e *localCache) GetLastAppliedOplogIndex(ctx context.Context) (int64, error) {
+	if e.db == nil {
 		return 0, fmt.Errorf("database connection is not available")
 	}
 
 	query := fmt.Sprintf("SELECT value FROM %s WHERE key = ?", metadataTableName)
-	row := sc.db.QueryRowContext(ctx, query, lastAppliedIdxKey)
+	row := e.db.QueryRowContext(ctx, query, lastAppliedIdxKey)
 
 	var value string
 	if err := row.Scan(&value); err != nil {
@@ -107,32 +76,9 @@ func (sc *sqliteEntity) getLastAppliedOplogIndex(ctx context.Context) (int64, er
 	return idx, nil
 }
 
-// getDbVersion retrieves the stored database version from metadata table
-func getDbVersion(ctx context.Context, db SQLiteDBInterface) (int32, error) {
-	if db == nil {
-		return 0, fmt.Errorf("database connection is not available")
-	}
-
-	query := fmt.Sprintf("SELECT value FROM %s WHERE key = ?", metadataTableName)
-	row := db.QueryRowContext(ctx, query, dbVersionKey)
-
-	var value string
-	if err := row.Scan(&value); err != nil {
-		return 0, fmt.Errorf("failed to get database version: %w", err)
-	}
-
-	version, err := strconv.ParseInt(value, 10, 32)
-	if err != nil {
-		return 0, fmt.Errorf("failed to parse database version: %w", err)
-	}
-
-	return int32(version), nil
-}
-
-// applyOplogEntries applies a batch of oplog entries to the SQLite database
-// consistent with server LocalCache logic
-func (sc *sqliteEntity) applyOplogEntries(ctx context.Context, entries []Oplog) error {
-	if sc.db == nil {
+// ApplyOplogEntries applies a batch of oplog entries to the SQLite database
+func (e *localCache) ApplyOplogEntries(ctx context.Context, entries []Oplog) error {
+	if e.db == nil {
 		return fmt.Errorf("database connection is not available")
 	}
 
@@ -140,19 +86,14 @@ func (sc *sqliteEntity) applyOplogEntries(ctx context.Context, entries []Oplog) 
 		return nil
 	}
 
-	tx, err := sc.db.BeginTx(ctx, nil)
+	tx, err := e.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	const (
-		dataTableName = "data"
-		pkColumn      = "id"
-	)
 	var maxProcessedID int64
 
-	// Process oplogs in batch, consistent with server LocalCache logic
 	for _, entry := range entries {
 		if entry.ID > maxProcessedID {
 			maxProcessedID = entry.ID
@@ -160,23 +101,21 @@ func (sc *sqliteEntity) applyOplogEntries(ctx context.Context, entries []Oplog) 
 
 		switch entry.Operation {
 		case OperationUpsert:
-			err = sc.applyUpsert(ctx, tx, entry, dataTableName, pkColumn, entry.DocID)
+			err = e.applyUpsert(ctx, tx, entry, entry.DocID)
 			if err != nil {
 				return fmt.Errorf("failed to apply upsert for doc_id %s: %w", entry.DocID, err)
 			}
 
 		case OperationDelete:
-			err = sc.applyDelete(ctx, tx, entry, dataTableName, pkColumn, entry.DocID)
+			err = e.applyDelete(ctx, tx, entry.DocID)
 			if err != nil {
 				return fmt.Errorf("failed to apply delete for doc_id %s: %w", entry.DocID, err)
 			}
 		default:
-			// Ignore unknown operation types
 		}
 	}
 
-	// Update the last processed ID (consistent with server metadata management)
-	err = sc.setLastProcessedID(ctx, tx, maxProcessedID)
+	err = e.setLastProcessedID(ctx, tx, maxProcessedID)
 	if err != nil {
 		return fmt.Errorf("failed to update last processed ID: %w", err)
 	}
@@ -189,8 +128,8 @@ func (sc *sqliteEntity) applyOplogEntries(ctx context.Context, entries []Oplog) 
 }
 
 // applyUpsert handles upsert operations consistent with server logic
-func (sc *sqliteEntity) applyUpsert(ctx context.Context, tx TxInterface, entry Oplog, dataTableName, pkColumn, pkValue string) error {
-	if sc.details == nil {
+func (e *localCache) applyUpsert(ctx context.Context, tx *sql.Tx, entry Oplog, pkValue string) error {
+	if e.details == nil {
 		return fmt.Errorf("entity details are not available")
 	}
 
@@ -198,78 +137,64 @@ func (sc *sqliteEntity) applyUpsert(ctx context.Context, tx TxInterface, entry O
 		return fmt.Errorf("missing data for oplog entry")
 	}
 
-	// Build query consistent with server mapper logic
-	columns := []string{quoteIdentifier(pkColumn)}
-	values := []any{pkValue}
+	// Build column names and placeholders for INSERT OR REPLACE
+	columns := []string{pkColumn}
 	placeholders := []string{"?"}
+	values := []any{pkValue}
 
-	// Use array indexing consistent with server logic (data is array indexed by column position)
-	for i, column := range sc.details.Shape.Columns {
-		colName := column.Name
-
-		// Get value from array at index i
-		var val interface{}
+	// Process data array according to shape columns
+	for i, column := range e.details.Shape.Columns {
 		if i < len(entry.Data) {
-			val = entry.Data[i]
-		} else {
-			val = nil // Use nil if array is shorter than expected
+			columns = append(columns, quoteIdentifier(column.Name))
+			placeholders = append(placeholders, "?")
+			values = append(values, entry.Data[i])
 		}
-
-		columns = append(columns, quoteIdentifier(colName))
-		values = append(values, val)
-		placeholders = append(placeholders, "?")
 	}
 
-	// Use INSERT OR REPLACE consistent with server mapper
-	sql := fmt.Sprintf("INSERT OR REPLACE INTO %s (%s) VALUES (%s)",
-		quoteIdentifier(dataTableName),
+	// Build and execute INSERT OR REPLACE query
+	query := fmt.Sprintf("INSERT OR REPLACE INTO %s (%s) VALUES (%s)",
+		dataTableName,
 		strings.Join(columns, ", "),
-		strings.Join(placeholders, ", "))
+		strings.Join(placeholders, ", "),
+	)
 
-	_, err := tx.ExecContext(ctx, sql, values...)
+	_, err := tx.ExecContext(ctx, query, values...)
 	if err != nil {
-		return fmt.Errorf("failed to execute upsert query: %s, error: %w", sql, err)
+		return fmt.Errorf("failed to execute upsert query: %w", err)
 	}
 
 	return nil
 }
 
 // applyDelete handles delete operations consistent with server logic
-func (sc *sqliteEntity) applyDelete(ctx context.Context, tx TxInterface, entry Oplog, dataTableName, pkColumn, pkValue string) error {
-	sql := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", quoteIdentifier(dataTableName), quoteIdentifier(pkColumn))
-
-	_, err := tx.ExecContext(ctx, sql, pkValue)
+func (e *localCache) applyDelete(ctx context.Context, tx *sql.Tx, pkValue string) error {
+	query := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", dataTableName, pkColumn)
+	_, err := tx.ExecContext(ctx, query, pkValue)
 	if err != nil {
-		return fmt.Errorf("failed to execute delete query: %s, error: %w", sql, err)
-	}
-
-	return nil
-}
-
-// setLastProcessedID updates the last processed ID, consistent with server metadata management
-func (sc *sqliteEntity) setLastProcessedID(ctx context.Context, tx TxInterface, lastProcessedID int64) error {
-	updateSQL := fmt.Sprintf(`INSERT OR REPLACE INTO %s (key, value) VALUES (?, ?)`, metadataTableName)
-	_, err := tx.ExecContext(ctx, updateSQL, lastAppliedIdxKey, fmt.Sprintf("%d", lastProcessedID))
-	if err != nil {
-		return fmt.Errorf("failed to update last processed ID to %d: %w", lastProcessedID, err)
+		return fmt.Errorf("failed to execute delete query: %w", err)
 	}
 	return nil
 }
 
-// query executes a SQL query against the entity's database
-func (sc *sqliteEntity) query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	if sc.db == nil {
+// setLastProcessedID updates the last processed ID in metadata table
+func (e *localCache) setLastProcessedID(ctx context.Context, tx *sql.Tx, lastProcessedID int64) error {
+	query := fmt.Sprintf(
+		"INSERT INTO %s (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+		metadataTableName,
+	)
+	_, err := tx.ExecContext(ctx, query, lastAppliedIdxKey, strconv.FormatInt(lastProcessedID, 10))
+	return err
+}
+
+// Query executes a query on the entity's data table
+func (e *localCache) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if e.db == nil {
 		return nil, fmt.Errorf("database connection is not available")
 	}
 
-	rows, err := sc.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute query: %w", err)
-	}
-
-	return rows, nil
+	return e.db.QueryContext(ctx, query, args...)
 }
 
 func quoteIdentifier(name string) string {
-	return fmt.Sprintf("`%s`", name)
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
