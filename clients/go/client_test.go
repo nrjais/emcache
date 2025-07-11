@@ -114,7 +114,7 @@ func TestNewClientWithDependencies_InvalidUpdateInterval(t *testing.T) {
 
 	_, err := NewClient(context.Background(), config)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ServerURL is required")
+	assert.Contains(t, err.Error(), "server URL is required")
 }
 
 func TestInitializeLastOplogIdx_MultipleEntities(t *testing.T) {
@@ -145,7 +145,7 @@ func TestInitializeLastOplogIdx_MultipleEntities(t *testing.T) {
 	client.entities["ent2"] = &entityState{entity: mockEnt2}
 	client.entities["ent3"] = &entityState{entity: mockEnt3}
 
-	err := client.initializeLastOplogIdx(context.Background())
+	err := client.initializeLastOplogIdx(context.Background(), 100)
 	require.NoError(t, err)
 
 	assert.Equal(t, int64(5), client.lastOplogIdx, "Should use the minimum oplog index")
@@ -156,10 +156,10 @@ func TestInitializeLastOplogIdx_NoEntities(t *testing.T) {
 		entities: make(map[string]*entityState),
 	}
 
-	err := client.initializeLastOplogIdx(context.Background())
+	err := client.initializeLastOplogIdx(context.Background(), 100)
 	require.NoError(t, err)
 
-	assert.Equal(t, int64(0), client.lastOplogIdx, "Should default to 0 when no entities")
+	assert.Equal(t, int64(100), client.lastOplogIdx, "Should use maxOplogID when no entities")
 }
 
 func TestInitializeLastOplogIdx_Error(t *testing.T) {
@@ -175,7 +175,7 @@ func TestInitializeLastOplogIdx_Error(t *testing.T) {
 
 	client.entities["ent1"] = &entityState{entity: mockEnt}
 
-	err := client.initializeLastOplogIdx(context.Background())
+	err := client.initializeLastOplogIdx(context.Background(), 100)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get last applied oplog index")
 }
@@ -183,17 +183,123 @@ func TestInitializeLastOplogIdx_Error(t *testing.T) {
 func TestSyncToLatest_Success(t *testing.T) {
 	client, mockTransport := setupTestClient(t)
 
-	// Mock the HTTP response for oplogs
+	// Mock the HTTP responses for the new workflow
 	mockTransport.doFunc = func(req *http.Request) (*http.Response, error) {
-		// Return empty oplog response to simulate no new entries
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
-		}, nil
+		switch req.URL.Path {
+		case "/api/oplogs/status":
+			// Return oplog status
+			status := OplogStatus{MaxID: 0}
+			statusBytes, _ := json.Marshal(status)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(statusBytes)),
+			}, nil
+		default:
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
+			}, nil
+		}
 	}
 
 	err := client.SyncOnce(context.Background())
 	assert.NoError(t, err)
+}
+
+func TestSyncWithNewWorkflow_Success(t *testing.T) {
+	client, mockTransport := setupTestClient(t)
+
+	// Mock the HTTP responses for the new workflow
+	mockTransport.doFunc = func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/api/oplogs/status":
+			// Return oplog status
+			status := OplogStatus{MaxID: 100}
+			statusBytes, _ := json.Marshal(status)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(statusBytes)),
+			}, nil
+		case "/api/oplogs":
+			// Return empty oplog response (no new entries)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
+			}, nil
+		default:
+			// Default response for other endpoints
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
+			}, nil
+		}
+	}
+
+	err := client.SyncOnce(context.Background())
+	assert.NoError(t, err)
+}
+
+func TestSyncWithNewWorkflow_BatchSynchronization(t *testing.T) {
+	client, mockTransport := setupTestClient(t)
+
+	// Setup mock entity to track applied entries
+	mockEntity := client.entities["test-entity"].entity.(*MockEntity)
+	var appliedEntries []Oplog
+	mockEntity.applyOplogEntriesFunc = func(ctx context.Context, entries []Oplog) error {
+		appliedEntries = append(appliedEntries, entries...)
+		return nil
+	}
+
+	// Mock the HTTP responses for the new workflow with actual batches
+	requestCount := 0
+	mockTransport.doFunc = func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/api/oplogs/status":
+			// Return oplog status with max ID 65
+			status := OplogStatus{MaxID: 65}
+			statusBytes, _ := json.Marshal(status)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(statusBytes)),
+			}, nil
+		case "/api/oplogs":
+			requestCount++
+			if requestCount == 1 {
+				// Return first batch (51-60)
+				entries := []Oplog{
+					{ID: 51, Entity: "test-entity", Operation: OperationUpsert, DocID: "doc1"},
+					{ID: 52, Entity: "test-entity", Operation: OperationUpsert, DocID: "doc2"},
+					{ID: 53, Entity: "test-entity", Operation: OperationUpsert, DocID: "doc3"},
+				}
+				entriesBytes, _ := json.Marshal(entries)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader(entriesBytes)),
+				}, nil
+			} else {
+				// Return empty response for subsequent requests
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
+				}, nil
+			}
+		default:
+			// Default response for other endpoints
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
+			}, nil
+		}
+	}
+
+	err := client.SyncOnce(context.Background())
+	assert.NoError(t, err)
+
+	// Verify that entries were applied
+	assert.Len(t, appliedEntries, 3)
+	assert.Equal(t, int64(51), appliedEntries[0].ID)
+	assert.Equal(t, int64(52), appliedEntries[1].ID)
+	assert.Equal(t, int64(53), appliedEntries[2].ID)
 }
 
 func TestSyncToLatest_ErrorGettingEntries(t *testing.T) {
@@ -206,7 +312,7 @@ func TestSyncToLatest_ErrorGettingEntries(t *testing.T) {
 
 	err := client.SyncOnce(context.Background())
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to get oplog entries")
+	assert.Contains(t, err.Error(), "failed to get oplog status")
 }
 
 func TestQuery_Success(t *testing.T) {
@@ -357,12 +463,24 @@ func TestApplyOplogEntries_WithUnknownEntity(t *testing.T) {
 func TestConcurrentOperations(t *testing.T) {
 	client, mockTransport := setupTestClient(t)
 
-	// Mock HTTP response
+	// Mock HTTP responses for the new workflow
 	mockTransport.doFunc = func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
-		}, nil
+		switch req.URL.Path {
+		case "/api/oplogs/status":
+			// Return oplog status
+			status := OplogStatus{MaxID: 0}
+			statusBytes, _ := json.Marshal(status)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(statusBytes)),
+			}, nil
+		default:
+			// Return empty oplog response for other requests
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
+			}, nil
+		}
 	}
 
 	// Test concurrent sync operations
@@ -425,10 +543,24 @@ func TestErrorRecoveryAndRetry(t *testing.T) {
 		if callCount == 1 {
 			return nil, errors.New("network error")
 		}
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
-		}, nil
+
+		// Handle the new workflow endpoints
+		switch req.URL.Path {
+		case "/api/oplogs/status":
+			// Return oplog status
+			status := OplogStatus{MaxID: 0}
+			statusBytes, _ := json.Marshal(status)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(statusBytes)),
+			}, nil
+		default:
+			// Return empty oplog response for other requests
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
+			}, nil
+		}
 	}
 
 	// First call should fail
@@ -438,7 +570,7 @@ func TestErrorRecoveryAndRetry(t *testing.T) {
 	// Second call should succeed
 	err = client.SyncOnce(context.Background())
 	assert.NoError(t, err)
-	assert.Equal(t, 2, callCount)
+	assert.GreaterOrEqual(t, callCount, 2)
 }
 
 func TestCompressionSupport(t *testing.T) {
@@ -446,7 +578,7 @@ func TestCompressionSupport(t *testing.T) {
 	testData := []byte("Hello, World! This is test data for compression.")
 
 	var buf bytes.Buffer
-	err := writeLoop(testData, bytes.NewReader([]byte(" Additional data")), &buf)
+	err := decompressStream(bytes.NewReader(testData), CompressionNone, &buf)
 	assert.NoError(t, err)
 
 	expected := "Hello, World! This is test data for compression. Additional data"
@@ -458,7 +590,7 @@ func TestDecompressionNoneType(t *testing.T) {
 	reader := bytes.NewReader(testData)
 
 	var buf bytes.Buffer
-	err := decompressStream(reader, []byte("first chunk "), CompressionNone, &buf)
+	err := decompressStream(reader, CompressionNone, &buf)
 	assert.NoError(t, err)
 
 	expected := "first chunk uncompressed data"

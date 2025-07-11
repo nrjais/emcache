@@ -119,13 +119,17 @@ type Entity struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type OplogStatus struct {
+	MaxID int64 `json:"max_id"`
+}
+
 type Oplog struct {
-	ID        int64         `json:"id"`
-	Operation Operation     `json:"operation"`
-	DocID     string        `json:"doc_id"`
-	Entity    string        `json:"entity"`
-	Data      []interface{} `json:"data"`
-	CreatedAt time.Time     `json:"created_at"`
+	ID        int64     `json:"id"`
+	Operation Operation `json:"operation"`
+	DocID     string    `json:"doc_id"`
+	Entity    string    `json:"entity"`
+	Data      []any     `json:"data"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type CreateEntityRequest struct {
@@ -151,6 +155,9 @@ type Config struct {
 
 	// BatchSize is the number of oplog entries to process at once (default: 1000)
 	BatchSize int
+
+	// Logger is the logger to use for logging
+	Logger *slog.Logger
 }
 
 type EntityConfig struct {
@@ -172,6 +179,7 @@ type Client struct {
 
 	// Internal dependencies
 	httpClient *http.Client
+	logger     *slog.Logger
 }
 
 // NewClient creates a new EmCache client with the given configuration.
@@ -186,6 +194,9 @@ func NewClient(ctx context.Context, config Config) (*Client, error) {
 	if config.BatchSize == 0 {
 		config.BatchSize = 1000
 	}
+	if config.Logger == nil {
+		config.Logger = slog.Default()
+	}
 
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
@@ -196,6 +207,7 @@ func NewClient(ctx context.Context, config Config) (*Client, error) {
 		entities:   make(map[string]*entityState),
 		colNames:   config.Collections,
 		httpClient: httpClient,
+		logger:     config.Logger,
 	}
 
 	if err := client.initialize(ctx); err != nil {
@@ -251,36 +263,30 @@ func (c *Client) StopSync() {
 
 // SyncOnce performs a single synchronization cycle, fetching and applying updates.
 func (c *Client) SyncOnce(ctx context.Context) error {
-	const maxIterations = 10
-	return c.syncToLatest(ctx, maxIterations)
+	oplogStatus, err := c.getOplogStatus(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get oplog status: %w", err)
+	}
+	return c.syncToLatest(ctx, oplogStatus.MaxID)
 }
 
-// syncToLatest fetches and applies oplog entries until up-to-date with the server
-func (c *Client) syncToLatest(ctx context.Context, maxIterations int) error {
-	for i := 0; i < maxIterations; i++ {
-		entries, err := c.getOplogEntries(ctx, c.colNames, c.lastOplogIdx)
-		if err != nil {
-			return fmt.Errorf("failed to get oplog entries: %w", err)
-		}
-
-		if len(entries) == 0 {
-			break
-		}
-
-		lastAppliedIdx, err := c.applyOplogEntries(ctx, entries)
-		if err != nil {
-			return fmt.Errorf("failed to apply oplog entries: %w", err)
-		}
-		c.lastOplogIdx = lastAppliedIdx
-		if len(entries) < c.config.BatchSize {
-			break
-		}
+func (c *Client) syncToLatest(ctx context.Context, maxOplogID int64) error {
+	totalOplogs := maxOplogID - c.lastOplogIdx
+	if totalOplogs <= 0 {
+		slog.Info("No oplogs to sync", "min_id", c.lastOplogIdx, "max_id", maxOplogID)
+		return nil
 	}
 
+	batchCount := int((totalOplogs + int64(c.config.BatchSize) - 1) / int64(c.config.BatchSize))
+	slog.Info("Sync plan", "min_id", c.lastOplogIdx, "max_id", maxOplogID, "total_oplogs", totalOplogs, "batch_count", batchCount)
+
+	_, err := c.syncBatches(ctx, batchCount)
+	if err != nil {
+		return fmt.Errorf("failed to sync batches: %w", err)
+	}
 	return nil
 }
 
-// AddEntity dynamically adds a new entity to be synced.
 func (c *Client) AddEntity(ctx context.Context, name string, shape *Shape) (*Entity, error) {
 	if shape == nil {
 		return nil, fmt.Errorf("shape cannot be nil")
@@ -389,8 +395,8 @@ func (c *Client) closeConnections() error {
 	return firstErr
 }
 
-// getCollectionsFromServer retrieves collections from the server
-func (c *Client) getCollectionsFromServer(ctx context.Context, collections []string) ([]Entity, error) {
+// getEntitiesFromServer retrieves entities from the server
+func (c *Client) getEntitiesFromServer(ctx context.Context, collections []string) ([]Entity, error) {
 	url := fmt.Sprintf("%s/api/entities", c.config.ServerURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -431,7 +437,7 @@ func (c *Client) getCollectionsFromServer(ctx context.Context, collections []str
 	return entities, nil
 }
 
-// initializeCollection initializes a single collection
+// initializeEntity initializes a single entity
 func (c *Client) initializeEntity(ctx context.Context, entityName string, entitiesData []Entity) (*entityState, error) {
 	entityConfig := EntityConfig{Name: entityName}
 	return c.addEntityInternal(ctx, entityConfig, entitiesData)
@@ -457,14 +463,14 @@ func (c *Client) initialize(ctx context.Context) error {
 		return fmt.Errorf("failed to create directory %s: %w", c.config.Directory, err)
 	}
 
-	collectionsData, err := c.getCollectionsFromServer(ctx, c.colNames)
+	entitiesData, err := c.getEntitiesFromServer(ctx, c.colNames)
 	if err != nil {
-		return fmt.Errorf("failed to get collections from server: %w", err)
+		return fmt.Errorf("failed to get entities from server: %w", err)
 	}
 
-	// Initialize collections in parallel
+	// Initialize entities in parallel
 	results := lop.Map(c.config.Collections, func(entityName string, _ int) lo.Tuple2[*entityState, error] {
-		state, err := c.initializeEntity(ctx, entityName, collectionsData)
+		state, err := c.initializeEntity(ctx, entityName, entitiesData)
 		return lo.T2(state, err)
 	})
 
@@ -477,10 +483,21 @@ func (c *Client) initialize(ctx context.Context) error {
 		c.entities[result.A.config.Name] = result.A
 	}
 
-	// Initialize the last oplog index
-	if err := c.initializeLastOplogIdx(ctx); err != nil {
+	// Get the max oplog ID from the server
+	oplogStatus, err := c.getOplogStatus(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get oplog status: %w", err)
+	}
+
+	// Initialize the last oplog index using the new workflow
+	if err := c.initializeLastOplogIdx(ctx, oplogStatus.MaxID); err != nil {
 		_ = c.Close()
 		return fmt.Errorf("failed to initialize last oplog index: %w", err)
+	}
+
+	// Perform initial sync using the new workflow
+	if err := c.syncToLatest(ctx, oplogStatus.MaxID); err != nil {
+		slog.Warn("Initial sync failed", "error", err)
 	}
 
 	return nil
@@ -498,35 +515,37 @@ func (c *Client) syncLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := c.SyncOnce(ctx); err != nil {
-				slog.Error("Failed to sync entities", "error", err)
+			more, err := c.syncBatches(ctx, 1)
+			if err != nil {
+				c.logger.Error("Failed to sync entities", "error", err)
 			}
-			ticker.Reset(c.config.SyncInterval)
+			if !more {
+				ticker.Reset(c.config.SyncInterval)
+			} else {
+				ticker.Reset(0)
+			}
 		}
 	}
 }
 
-// applyOplogEntries applies a batch of oplog entries to the appropriate collection databases.
-// It returns the index of the last successfully applied entry across all collections.
-// Groups oplogs by entity and processes each entity separately, consistent with server replicator logic.
+// applyOplogEntries applies a batch of oplog entries to the appropriate entity databases.
+// It returns the index of the last successfully applied entry across all entities.
 func (c *Client) applyOplogEntries(ctx context.Context, entries []Oplog) (int64, error) {
 	if len(entries) == 0 {
 		return c.lastOplogIdx, nil
 	}
 
-	// Group oplogs by entity (consistent with server replicator)
-	entriesByCollection := make(map[string][]Oplog)
+	entriesByEntity := make(map[string][]Oplog)
 	var maxProcessedID int64 = c.lastOplogIdx
 
 	for _, entry := range entries {
-		entriesByCollection[entry.Entity] = append(entriesByCollection[entry.Entity], entry)
+		entriesByEntity[entry.Entity] = append(entriesByEntity[entry.Entity], entry)
 		if entry.ID > maxProcessedID {
 			maxProcessedID = entry.ID
 		}
 	}
 
-	// Process each entity's oplogs separately (consistent with server)
-	for entityName, entityEntries := range entriesByCollection {
+	for entityName, entityEntries := range entriesByEntity {
 		state, ok := c.entities[entityName]
 		if !ok {
 			slog.Warn("Entity not found, skipping oplogs", "entity", entityName)
@@ -546,7 +565,7 @@ func (c *Client) applyOplogEntries(ctx context.Context, entries []Oplog) (int64,
 	return maxProcessedID, nil
 }
 
-// StopDbUpdates signals all running update goroutines to stop and waits for them to finish.
+// StopUpdates signals all running update goroutines to stop and waits for them to finish.
 func (c *Client) StopUpdates() {
 	if c.cancelFunc != nil {
 		c.cancelFunc()
@@ -557,8 +576,8 @@ func (c *Client) StopUpdates() {
 }
 
 // initializeLastOplogIdx determines the lowest offset from all databases to start sync correctly
-func (c *Client) initializeLastOplogIdx(ctx context.Context) error {
-	minIndex := int64(-1)
+func (c *Client) initializeLastOplogIdx(ctx context.Context, maxOplogID int64) error {
+	minIndex := maxOplogID
 
 	for entityName, state := range c.entities {
 		idx, err := state.entity.GetLastAppliedOplogIndex(ctx)
@@ -566,17 +585,11 @@ func (c *Client) initializeLastOplogIdx(ctx context.Context) error {
 			return fmt.Errorf("failed to get last applied oplog index for entity '%s': %w", entityName, err)
 		}
 
-		if minIndex == -1 || idx < minIndex {
+		if idx < minIndex {
 			minIndex = idx
 		}
 	}
-
-	if minIndex == -1 {
-		minIndex = 0 // Default if no entities
-	}
-
 	c.lastOplogIdx = minIndex
-
 	return nil
 }
 
@@ -642,7 +655,6 @@ func (c *Client) downloadDbForEntity(ctx context.Context, entityName string, wri
 	if err != nil {
 		return 0, fmt.Errorf("failed to create request: %w", err)
 	}
-
 	req.Header.Set("Accept-Encoding", "zstd, gzip")
 
 	resp, err := c.httpClient.Do(req)
@@ -667,13 +679,7 @@ func (c *Client) downloadDbForEntity(ctx context.Context, entityName string, wri
 		}
 	}
 
-	firstChunk := make([]byte, 512)
-	n, err := resp.Body.Read(firstChunk)
-	if err != nil && err != io.EOF {
-		return 0, fmt.Errorf("failed to read first chunk: %w", err)
-	}
-
-	return 0, decompressStream(resp.Body, firstChunk[:n], compression, writer)
+	return 0, decompressStream(resp.Body, compression, writer)
 }
 
 func (c *Client) getOplogEntries(ctx context.Context, entityNames []string, afterIndex int64) ([]Oplog, error) {
@@ -709,136 +715,99 @@ func (c *Client) getOplogEntries(ctx context.Context, entityNames []string, afte
 	return entries, nil
 }
 
+func (c *Client) getOplogStatus(ctx context.Context) (*OplogStatus, error) {
+	url := fmt.Sprintf("%s/api/oplogs/status", c.config.ServerURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get oplog status: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get oplog status: HTTP %d", resp.StatusCode)
+	}
+
+	var status OplogStatus
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return nil, fmt.Errorf("failed to decode oplog status: %w", err)
+	}
+
+	return &status, nil
+}
+
+func (c *Client) syncBatches(ctx context.Context, batchCount int) (bool, error) {
+	currentOffset := c.lastOplogIdx
+
+	for i := 0; i < batchCount; i++ {
+		c.logger.Info("Syncing batch", "batch", i+1, "of", batchCount, "from", currentOffset)
+
+		entries, err := c.getOplogEntries(ctx, c.colNames, currentOffset)
+		if err != nil {
+			return false, fmt.Errorf("failed to get oplog entries for batch %d: %w", i+1, err)
+		}
+
+		lastAppliedIdx, err := c.applyOplogEntries(ctx, entries)
+		if err != nil {
+			return false, fmt.Errorf("failed to apply oplog entries for batch %d: %w", i+1, err)
+		}
+
+		currentOffset = lastAppliedIdx
+		c.lastOplogIdx = lastAppliedIdx
+
+		// If we got fewer entries than batch size, we're done
+		if len(entries) < c.config.BatchSize {
+			c.logger.Info("Sync complete", "last_applied_id", lastAppliedIdx)
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
 func decompressStream(
 	reader io.Reader,
-	firstChunk []byte,
 	compression CompressionType,
 	writer io.Writer,
 ) error {
 	switch compression {
 	case CompressionZstd:
-		return decompressZstdStream(reader, firstChunk, writer)
+		return decompressZstdStream(reader, writer)
 	case CompressionGzip:
-		return decompressGzipStream(reader, firstChunk, writer)
+		return decompressGzipStream(reader, writer)
 	case CompressionNone:
-		if err := writeLoop(firstChunk, reader, writer); err != nil {
-			if err == io.EOF {
-				return nil
-			}
+		_, err := io.Copy(writer, reader)
+		if err != nil {
 			return fmt.Errorf("failed to write chunks: %w", err)
 		}
-		return nil
 	default:
 		return fmt.Errorf("unsupported compression type %d", compression)
 	}
+	return nil
 }
 
-func writeLoop(firstChunk []byte, reader io.Reader, writer io.Writer) error {
-	if len(firstChunk) > 0 {
-		if _, err := writer.Write(firstChunk); err != nil {
-			return fmt.Errorf("failed to write first uncompressed chunk: %w", err)
-		}
-	}
-
-	_, err := io.Copy(writer, reader)
+func decompressGzipStream(reader io.Reader, writer io.Writer) error {
+	gr, err := gzip.NewReader(reader)
 	if err != nil {
-		return fmt.Errorf("failed to copy data: %w", err)
+		return fmt.Errorf("failed to create gzip reader: %w", err)
 	}
+	defer gr.Close()
 
-	return nil
+	_, err = io.Copy(writer, gr)
+	return err
 }
 
-func decompressGzipStream(reader io.Reader, firstChunk []byte, writer io.Writer) error {
-	pr, pw := io.Pipe()
-	copyErrChan := make(chan error, 1)
-	feedErrChan := make(chan error, 1)
-
-	go func() {
-		defer pr.Close()
-		gr, err := gzip.NewReader(pr)
-		if err != nil {
-			copyErrChan <- fmt.Errorf("failed to create gzip reader: %w", err)
-			return
-		}
-		defer gr.Close()
-
-		_, copyErr := io.Copy(writer, gr)
-		if copyErr != nil {
-			copyErrChan <- fmt.Errorf("gzip decompression write failed: %w", copyErr)
-		} else {
-			copyErrChan <- nil
-		}
-	}()
-
-	go func() {
-		defer pw.Close()
-		if err := writeLoop(firstChunk, reader, pw); err != nil {
-			if err == io.EOF {
-				feedErrChan <- nil
-			} else {
-				feedErrChan <- err
-			}
-		} else {
-			feedErrChan <- nil
-		}
-	}()
-
-	feedErr := <-feedErrChan
-	copyErr := <-copyErrChan
-
-	if feedErr != nil {
-		return feedErr
-	}
-	if copyErr != nil {
-		return copyErr
-	}
-
-	return nil
-}
-
-func decompressZstdStream(reader io.Reader, firstChunk []byte, writer io.Writer) error {
-	pr, pw := io.Pipe()
-	copyErrChan := make(chan error, 1)
-	feedErrChan := make(chan error, 1)
-
-	zr, err := zstd.NewReader(pr)
+func decompressZstdStream(reader io.Reader, writer io.Writer) error {
+	zr, err := zstd.NewReader(reader)
 	if err != nil {
 		return fmt.Errorf("failed to create zstd reader: %w", err)
 	}
 	defer zr.Close()
 
-	go func() {
-		defer pr.Close()
-		_, copyErr := io.Copy(writer, zr)
-		if copyErr != nil {
-			copyErrChan <- fmt.Errorf("decompression write failed: %w", copyErr)
-		} else {
-			copyErrChan <- nil
-		}
-	}()
-
-	go func() {
-		defer pw.Close()
-		if err := writeLoop(firstChunk, reader, pw); err != nil {
-			if err == io.EOF {
-				feedErrChan <- nil
-			} else {
-				feedErrChan <- err
-			}
-		} else {
-			feedErrChan <- nil
-		}
-	}()
-
-	feedErr := <-feedErrChan
-	copyErr := <-copyErrChan
-
-	if feedErr != nil {
-		return feedErr
-	}
-	if copyErr != nil {
-		return copyErr
-	}
-
-	return nil
+	_, err = io.Copy(writer, zr)
+	return err
 }

@@ -64,4 +64,13 @@ impl OplogDatabase {
 
         Ok(rows)
     }
+
+    pub async fn get_max_oplog_id(&self) -> anyhow::Result<Option<i64>> {
+        let result = sqlx::query_scalar("SELECT MAX(id) FROM oplog")
+            .fetch_one(self.client.postgres())
+            .await
+            .context("Failed to get max oplog ID")?;
+
+        Ok(result)
+    }
 }
