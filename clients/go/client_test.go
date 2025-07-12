@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"resty.dev/v3"
 )
 
 type MockHTTPClient struct {
@@ -66,20 +67,67 @@ func setupTestClient() (*Client, *MockRoundTripper) {
 		Collections:  []string{},
 		SyncInterval: time.Second,
 		BatchSize:    10,
+		Logger:       slog.Default(),
 	}
+
+	// Create a resty client with the mock transport
+	restyClient := resty.New()
+	restyClient.SetTransport(mockTransport)
 
 	client := &Client{
 		config:       config,
 		entities:     make(map[string]*entityState),
 		colNames:     []string{"test-entity"},
 		lastOplogIdx: 0,
-		httpClient:   &http.Client{Transport: mockTransport},
+		httpClient:   restyClient,
 		logger:       slog.Default(),
 	}
 
 	mockEntity := &MockEntity{
 		getLastAppliedOplogIndexFunc: func(ctx context.Context) (int64, error) {
 			return 0, nil
+		},
+		closeFunc: func() error { return nil },
+	}
+
+	client.entities["test-entity"] = &entityState{
+		config: EntityConfig{Name: "test-entity"},
+		entity: mockEntity,
+	}
+
+	return client, mockTransport
+}
+
+func setupTestClientWithMock(mockFunc func(req *http.Request) (*http.Response, error)) (*Client, *MockRoundTripper) {
+	mockTransport := &MockRoundTripper{
+		doFunc: mockFunc,
+	}
+
+	config := Config{
+		ServerURL:    "http://test-server",
+		Directory:    "/test/dir",
+		Collections:  []string{"test-entity"},
+		SyncInterval: time.Second,
+		BatchSize:    10,
+		Logger:       slog.Default(),
+	}
+
+	// Create a resty client with the mock transport
+	restyClient := resty.New()
+	restyClient.SetTransport(mockTransport)
+
+	client := &Client{
+		config:       config,
+		entities:     make(map[string]*entityState),
+		colNames:     []string{"test-entity"},
+		lastOplogIdx: 50,
+		httpClient:   restyClient,
+		logger:       slog.Default(),
+	}
+
+	mockEntity := &MockEntity{
+		getLastAppliedOplogIndexFunc: func(ctx context.Context) (int64, error) {
+			return 50, nil
 		},
 		closeFunc: func() error { return nil },
 	}
@@ -235,63 +283,79 @@ func TestSyncWithNewWorkflow_Success(t *testing.T) {
 }
 
 func TestSyncWithNewWorkflow_BatchSynchronization(t *testing.T) {
-	client, mockTransport := setupTestClient()
-
-	mockEntity := client.entities["test-entity"].entity.(*MockEntity)
-	var appliedEntries []Oplog
-	mockEntity.applyOplogEntriesFunc = func(ctx context.Context, entries []Oplog) error {
-		appliedEntries = append(appliedEntries, entries...)
-		return nil
-	}
-
 	requestCount := 0
-	mockTransport.doFunc = func(req *http.Request) (*http.Response, error) {
+	mockFunc := func(req *http.Request) (*http.Response, error) {
+		t.Logf("Mock called with path: %s, method: %s", req.URL.Path, req.Method)
 		switch req.URL.Path {
 		case "/api/oplogs/status":
-
+			// Return max ID of 65 so we have 15 oplogs to sync (51-65)
 			status := OplogStatus{MaxID: 65}
 			statusBytes, _ := json.Marshal(status)
+			t.Logf("Returning oplog status with MaxID: %d, JSON: %s", status.MaxID, string(statusBytes))
 			return &http.Response{
 				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
 				Body:       io.NopCloser(bytes.NewReader(statusBytes)),
 			}, nil
 		case "/api/oplogs":
 			requestCount++
+			t.Logf("Oplog request #%d", requestCount)
 			if requestCount == 1 {
-
+				// First batch returns 3 entries (51, 52, 53)
 				entries := []Oplog{
 					{ID: 51, Entity: "test-entity", Operation: OperationUpsert, DocID: "doc1"},
 					{ID: 52, Entity: "test-entity", Operation: OperationUpsert, DocID: "doc2"},
 					{ID: 53, Entity: "test-entity", Operation: OperationUpsert, DocID: "doc3"},
 				}
 				entriesBytes, _ := json.Marshal(entries)
+				t.Logf("Returning %d oplog entries", len(entries))
 				return &http.Response{
 					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
 					Body:       io.NopCloser(bytes.NewReader(entriesBytes)),
 				}, nil
 			} else {
-
+				// Subsequent requests return empty to end sync
+				t.Logf("Returning empty oplog entries")
 				return &http.Response{
 					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
 					Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
 				}, nil
 			}
 		default:
-
+			// Default response for other requests
+			t.Logf("Unknown path: %s, returning empty response", req.URL.Path)
 			return &http.Response{
 				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
 				Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
 			}, nil
 		}
 	}
 
+	client, _ := setupTestClientWithMock(mockFunc)
+
+	var appliedEntries []Oplog
+	mockEntity := client.entities["test-entity"].entity.(*MockEntity)
+	mockEntity.applyOplogEntriesFunc = func(ctx context.Context, entries []Oplog) error {
+		t.Logf("Mock entity applying %d entries", len(entries))
+		appliedEntries = append(appliedEntries, entries...)
+		return nil
+	}
+
+	t.Logf("Starting SyncOnce with client lastOplogIdx: %d", client.lastOplogIdx)
 	err := client.SyncOnce(context.Background())
 	assert.NoError(t, err)
 
+	// Verify that the 3 entries were applied
+	t.Logf("Applied entries count: %d", len(appliedEntries))
 	assert.Len(t, appliedEntries, 3)
-	assert.Equal(t, int64(51), appliedEntries[0].ID)
-	assert.Equal(t, int64(52), appliedEntries[1].ID)
-	assert.Equal(t, int64(53), appliedEntries[2].ID)
+	if len(appliedEntries) >= 3 {
+		assert.Equal(t, int64(51), appliedEntries[0].ID)
+		assert.Equal(t, int64(52), appliedEntries[1].ID)
+		assert.Equal(t, int64(53), appliedEntries[2].ID)
+	}
 }
 
 func TestSyncToLatest_ErrorGettingEntries(t *testing.T) {
@@ -330,7 +394,7 @@ func TestAddEntity_Success(t *testing.T) {
 	client, mockTransport := setupTestClient()
 
 	shape := &Shape{
-		IdColumn: IdColumn{Path: "id", Type: IdTypeString},
+		IdColumn: IdColumn{Type: IdTypeString},
 		Columns:  []Column{{Name: "test-entity", Type: DataTypeString, Path: "name"}},
 	}
 
@@ -343,16 +407,13 @@ func TestAddEntity_Success(t *testing.T) {
 		}, nil
 	}
 
-	_, err := client.AddEntity(context.Background(), "test-entity", shape)
+	_, err := client.CreateEntity(context.Background(), CreateEntityRequest{
+		Name:   "test-entity",
+		Client: "main",
+		Source: "test-entity",
+		Shape:  *shape,
+	})
 	assert.NoError(t, err)
-}
-
-func TestAddEntity_NilShape(t *testing.T) {
-	client, _ := setupTestClient()
-
-	_, err := client.AddEntity(context.Background(), "test-entity", nil)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "shape cannot be nil")
 }
 
 func TestRemoveEntity_Success(t *testing.T) {
@@ -447,17 +508,17 @@ func TestConcurrentOperations(t *testing.T) {
 	mockTransport.doFunc = func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {
 		case "/api/oplogs/status":
-
 			status := OplogStatus{MaxID: 0}
 			statusBytes, _ := json.Marshal(status)
 			return &http.Response{
 				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
 				Body:       io.NopCloser(bytes.NewReader(statusBytes)),
 			}, nil
 		default:
-
 			return &http.Response{
 				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
 				Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
 			}, nil
 		}
@@ -521,17 +582,17 @@ func TestErrorRecoveryAndRetry(t *testing.T) {
 
 		switch req.URL.Path {
 		case "/api/oplogs/status":
-
 			status := OplogStatus{MaxID: 0}
 			statusBytes, _ := json.Marshal(status)
 			return &http.Response{
 				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
 				Body:       io.NopCloser(bytes.NewReader(statusBytes)),
 			}, nil
 		default:
-
 			return &http.Response{
 				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
 				Body:       io.NopCloser(bytes.NewReader([]byte("[]"))),
 			}, nil
 		}
@@ -543,30 +604,6 @@ func TestErrorRecoveryAndRetry(t *testing.T) {
 	err = client.SyncOnce(context.Background())
 	assert.NoError(t, err)
 	assert.GreaterOrEqual(t, callCount, 2)
-}
-
-func TestCompressionSupport(t *testing.T) {
-
-	testData := []byte("Hello, World! This is test data for compression.")
-
-	var buf bytes.Buffer
-	err := decompressStream(bytes.NewReader(testData), CompressionNone, &buf)
-	assert.NoError(t, err)
-
-	expected := "Hello, World! This is test data for compression."
-	assert.Equal(t, expected, buf.String())
-}
-
-func TestDecompressionNoneType(t *testing.T) {
-	testData := []byte("uncompressed data")
-	reader := bytes.NewReader(testData)
-
-	var buf bytes.Buffer
-	err := decompressStream(reader, CompressionNone, &buf)
-	assert.NoError(t, err)
-
-	expected := "uncompressed data"
-	assert.Equal(t, expected, buf.String())
 }
 
 func TestBatchProcessingLimits(t *testing.T) {

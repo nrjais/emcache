@@ -29,34 +29,21 @@
 package emcache
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/klauspost/compress/zstd"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/samber/lo"
 	lop "github.com/samber/lo/parallel"
-)
-
-// CompressionType represents compression types
-type CompressionType int
-
-const (
-	CompressionNone CompressionType = iota
-	CompressionZstd
-	CompressionGzip
+	"resty.dev/v3"
 )
 
 // Operation types for oplog entries
@@ -139,6 +126,18 @@ type CreateEntityRequest struct {
 	Shape  Shape  `json:"shape"`
 }
 
+type ErrorResponse struct {
+	Errors []string `json:"errors"`
+	Reason string   `json:"reason"`
+}
+
+func (e ErrorResponse) Error() string {
+	if len(e.Errors) > 0 {
+		return fmt.Sprintf("errors: %s", strings.Join(e.Errors, ", "))
+	}
+	return fmt.Sprintf("reason: %s", e.Reason)
+}
+
 // Config holds the configuration for the EmCache client.
 type Config struct {
 	// ServerURL is the base URL of the EmCache server
@@ -178,7 +177,7 @@ type Client struct {
 	stopWg       sync.WaitGroup
 
 	// Internal dependencies
-	httpClient *http.Client
+	httpClient *resty.Client
 	logger     *slog.Logger
 }
 
@@ -198,9 +197,10 @@ func NewClient(ctx context.Context, config Config) (*Client, error) {
 		config.Logger = slog.Default()
 	}
 
-	httpClient := &http.Client{
-		Timeout: 30 * time.Second,
-	}
+	httpClient := resty.New()
+	httpClient.SetTimeout(30 * time.Second)
+	httpClient.AddContentDecompresser("zstd", decompressZstd)
+	httpClient.SetOutputDirectory(config.Directory)
 
 	client := &Client{
 		config:     config,
@@ -267,12 +267,12 @@ func (c *Client) SyncOnce(ctx context.Context) error {
 func (c *Client) syncToLatest(ctx context.Context, maxOplogID int64) error {
 	totalOplogs := maxOplogID - c.lastOplogIdx
 	if totalOplogs <= 0 {
-		slog.Info("No oplogs to sync", "min_id", c.lastOplogIdx, "max_id", maxOplogID)
+		c.logger.Info("No oplogs to sync", "min_id", c.lastOplogIdx, "max_id", maxOplogID)
 		return nil
 	}
 
 	batchCount := int((totalOplogs + int64(c.config.BatchSize) - 1) / int64(c.config.BatchSize))
-	slog.Info("Sync plan", "min_id", c.lastOplogIdx, "max_id", maxOplogID, "total_oplogs", totalOplogs, "batch_count", batchCount)
+	c.logger.Info("Sync plan", "min_id", c.lastOplogIdx, "max_id", maxOplogID, "total_oplogs", totalOplogs, "batch_count", batchCount)
 
 	_, err := c.syncBatches(ctx, batchCount)
 	if err != nil {
@@ -281,43 +281,27 @@ func (c *Client) syncToLatest(ctx context.Context, maxOplogID int64) error {
 	return nil
 }
 
-func (c *Client) AddEntity(ctx context.Context, name string, shape *Shape) (*Entity, error) {
-	if shape == nil {
-		return nil, fmt.Errorf("shape cannot be nil")
-	}
-
-	reqBody := CreateEntityRequest{
-		Name:   name,
-		Client: "go-client",
-		Source: "unknown",
-		Shape:  *shape,
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
+func (c *Client) CreateEntity(ctx context.Context, req CreateEntityRequest) (*Entity, error) {
 	url := fmt.Sprintf("%s/api/entities", c.config.ServerURL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+	var entity Entity
+	var errorResponse ErrorResponse
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.R().
+		SetContext(ctx).
+		SetBody(req).
+		SetResult(&entity).
+		SetError(&errorResponse).
+		Post(url)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to create entity: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to create entity: HTTP %d", resp.StatusCode)
-	}
-
-	var entity Entity
-	if err := json.NewDecoder(resp.Body).Decode(&entity); err != nil {
-		return nil, fmt.Errorf("failed to decode entity response: %w", err)
+	if resp.StatusCode() != 200 {
+		if len(errorResponse.Errors) > 0 {
+			return nil, fmt.Errorf("failed to create entity: %w", errorResponse)
+		}
+		return nil, fmt.Errorf("failed to create entity: %w", errorResponse)
 	}
 
 	return &entity, nil
@@ -326,19 +310,17 @@ func (c *Client) AddEntity(ctx context.Context, name string, shape *Shape) (*Ent
 // RemoveEntity removes an entity from the server.
 func (c *Client) RemoveEntity(ctx context.Context, name string) error {
 	url := fmt.Sprintf("%s/api/entities/%s", c.config.ServerURL, name)
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.R().
+		SetContext(ctx).
+		Delete(url)
+
 	if err != nil {
 		return fmt.Errorf("failed to delete entity: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to delete entity: HTTP %d", resp.StatusCode)
+	if resp.StatusCode() != 200 {
+		return fmt.Errorf("failed to delete entity: HTTP %d", resp.StatusCode())
 	}
 
 	return nil
@@ -347,24 +329,19 @@ func (c *Client) RemoveEntity(ctx context.Context, name string) error {
 // GetEntities retrieves information about available entities from the server.
 func (c *Client) GetEntities(ctx context.Context) ([]Entity, error) {
 	url := fmt.Sprintf("%s/api/entities", c.config.ServerURL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
+	var entities []Entity
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.R().
+		SetContext(ctx).
+		SetResult(&entities).
+		Get(url)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to get entities: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to get entities: HTTP %d", resp.StatusCode)
-	}
-
-	var entities []Entity
-	if err := json.NewDecoder(resp.Body).Decode(&entities); err != nil {
-		return nil, fmt.Errorf("failed to decode entities response: %w", err)
+	if resp.StatusCode() != 200 {
+		return nil, fmt.Errorf("failed to get entities: HTTP %d", resp.StatusCode())
 	}
 
 	return entities, nil
@@ -392,24 +369,19 @@ func (c *Client) closeConnections() error {
 // getEntitiesFromServer retrieves entities from the server
 func (c *Client) getEntitiesFromServer(ctx context.Context, collections []string) ([]Entity, error) {
 	url := fmt.Sprintf("%s/api/entities", c.config.ServerURL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
+	var entities []Entity
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.R().
+		SetContext(ctx).
+		SetResult(&entities).
+		Get(url)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to get entities: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to get entities: HTTP %d", resp.StatusCode)
-	}
-
-	var entities []Entity
-	if err := json.NewDecoder(resp.Body).Decode(&entities); err != nil {
-		return nil, fmt.Errorf("failed to decode entities response: %w", err)
+	if resp.StatusCode() != 200 {
+		return nil, fmt.Errorf("failed to get entities: HTTP %d", resp.StatusCode())
 	}
 
 	// Filter entities by requested collection names if provided
@@ -445,14 +417,17 @@ func validateConfig(config Config) error {
 	if config.Directory == "" {
 		return fmt.Errorf("directory is required")
 	}
-	if len(config.Collections) == 0 {
-		return fmt.Errorf("at least one collection must be specified")
-	}
+
 	return nil
 }
 
 // initialize sets up the client's internal state
 func (c *Client) initialize(ctx context.Context) error {
+	if len(c.colNames) == 0 {
+		c.logger.Info("No collections specified, skipping initialization")
+		return nil
+	}
+
 	if err := os.MkdirAll(c.config.Directory, 0755); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", c.config.Directory, err)
 	}
@@ -491,7 +466,7 @@ func (c *Client) initialize(ctx context.Context) error {
 
 	// Perform initial sync using the new workflow
 	if err := c.syncToLatest(ctx, oplogStatus.MaxID); err != nil {
-		slog.Warn("Initial sync failed", "error", err)
+		c.logger.Error("Initial sync failed", "error", err)
 	}
 
 	return nil
@@ -542,11 +517,11 @@ func (c *Client) applyOplogEntries(ctx context.Context, entries []Oplog) (int64,
 	for entityName, entityEntries := range entriesByEntity {
 		state, ok := c.entities[entityName]
 		if !ok {
-			slog.Warn("Entity not found, skipping oplogs", "entity", entityName)
+			c.logger.Warn("Entity not found, skipping oplogs", "entity", entityName)
 			continue
 		}
 		if state.entity == nil {
-			slog.Warn("Entity not initialized, skipping oplogs", "entity", entityName)
+			c.logger.Warn("Entity not initialized, skipping oplogs", "entity", entityName)
 			continue
 		}
 
@@ -594,23 +569,20 @@ func (c *Client) addEntityInternal(ctx context.Context, entityConfig EntityConfi
 	}
 
 	dbPath := filepath.Join(c.config.Directory, entityConfig.Name+".db")
-
 	// Download the database if it doesn't exist
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		lastOplogIdx, err := c.downloadDb(ctx, dbPath, entityConfig)
+		lastOplogIdx, err := c.downloadDb(ctx, entityConfig)
 		if err != nil {
 			return nil, fmt.Errorf("failed to download database for entity '%s': %w", entityConfig.Name, err)
 		}
 		_ = lastOplogIdx
 	}
 
-	// Open the database
 	db, err := openSQLiteDB(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database for entity '%s': %w", entityConfig.Name, err)
 	}
 
-	// Create the SQLite entity
 	entity := &localCache{
 		db:      db,
 		details: entityDetails,
@@ -631,79 +603,49 @@ func (*Client) entityDetails(serverEntities []Entity, entityConfig EntityConfig)
 	return nil
 }
 
-func (c *Client) downloadDb(ctx context.Context, dbPath string, entityConfig EntityConfig) (int64, error) {
-	file, err := os.Create(dbPath)
-	if err != nil {
-		return 0, fmt.Errorf("failed to create database file: %w", err)
-	}
-	defer file.Close()
+func (c *Client) downloadDb(ctx context.Context, entityConfig EntityConfig) (int64, error) {
+	url := fmt.Sprintf("%s/api/entities/%s/snapshot", c.config.ServerURL, entityConfig.Name)
 
-	return c.downloadDbForEntity(ctx, entityConfig.Name, file)
-}
+	resp, err := c.httpClient.R().
+		SetContext(ctx).
+		SetHeader("Accept-Encoding", "zstd, gzip").
+		SetSaveResponse(true).
+		SetOutputFileName(fmt.Sprintf("%s.db", entityConfig.Name)).
+		Get(url)
 
-func (c *Client) downloadDbForEntity(ctx context.Context, entityName string, writer io.WriteCloser) (int64, error) {
-	defer writer.Close()
-
-	url := fmt.Sprintf("%s/api/entities/%s/snapshot", c.config.ServerURL, entityName)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return 0, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Accept-Encoding", "zstd, gzip")
-
-	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("failed to download database: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("failed to download database: HTTP %d", resp.StatusCode)
+	if resp.StatusCode() != 200 {
+		return 0, fmt.Errorf("failed to download database: HTTP %d", resp.StatusCode())
 	}
 
-	compression := CompressionNone
-	if contentEncoding := resp.Header.Get("Content-Encoding"); contentEncoding != "" {
-		switch contentEncoding {
-		case "gzip":
-			compression = CompressionGzip
-		case "zstd":
-			compression = CompressionZstd
-		default:
-			compression = CompressionNone
-		}
-	}
-
-	return 0, decompressStream(resp.Body, compression, writer)
+	return 0, nil
 }
 
 func (c *Client) getOplogEntries(ctx context.Context, entityNames []string, afterIndex int64) ([]Oplog, error) {
+	var entries []Oplog
+
+	queryParams := url.Values{
+		"after":  {fmt.Sprint(afterIndex)},
+		"limit":  {fmt.Sprint(c.config.BatchSize)},
+		"entity": entityNames,
+	}
+
+	request := c.httpClient.R().
+		SetContext(ctx).
+		SetResult(&entries).
+		SetQueryParamsFromValues(queryParams)
+
 	url := fmt.Sprintf("%s/api/oplogs", c.config.ServerURL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	q := req.URL.Query()
-	q.Set("after", strconv.FormatInt(afterIndex, 10))
-	q.Set("limit", strconv.Itoa(c.config.BatchSize))
-	for _, name := range entityNames {
-		q.Add("entity", name)
-	}
-	req.URL.RawQuery = q.Encode()
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := request.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get oplog entries: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to get oplog entries: HTTP %d", resp.StatusCode)
-	}
-
-	var entries []Oplog
-	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
-		return nil, fmt.Errorf("failed to decode oplog entries: %w", err)
+	if resp.StatusCode() != 200 {
+		return nil, fmt.Errorf("failed to get oplog entries: HTTP %d", resp.StatusCode())
 	}
 
 	return entries, nil
@@ -711,24 +653,19 @@ func (c *Client) getOplogEntries(ctx context.Context, entityNames []string, afte
 
 func (c *Client) getOplogStatus(ctx context.Context) (*OplogStatus, error) {
 	url := fmt.Sprintf("%s/api/oplogs/status", c.config.ServerURL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
+	var status OplogStatus
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.R().
+		SetContext(ctx).
+		SetResult(&status).
+		Get(url)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to get oplog status: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to get oplog status: HTTP %d", resp.StatusCode)
-	}
-
-	var status OplogStatus
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		return nil, fmt.Errorf("failed to decode oplog status: %w", err)
+	if resp.StatusCode() != 200 {
+		return nil, fmt.Errorf("failed to get oplog status: HTTP %d", resp.StatusCode())
 	}
 
 	return &status, nil
@@ -738,7 +675,7 @@ func (c *Client) syncBatches(ctx context.Context, batchCount int) (bool, error) 
 	currentOffset := c.lastOplogIdx
 
 	for i := 0; i < batchCount; i++ {
-		c.logger.Info("Syncing batch", "batch", i+1, "of", batchCount, "from", currentOffset)
+		c.logger.Info("Syncing batch", "batch_number", i+1, "current_offset", currentOffset)
 
 		entries, err := c.getOplogEntries(ctx, c.colNames, currentOffset)
 		if err != nil {
@@ -761,47 +698,4 @@ func (c *Client) syncBatches(ctx context.Context, batchCount int) (bool, error) 
 	}
 
 	return true, nil
-}
-
-func decompressStream(
-	reader io.Reader,
-	compression CompressionType,
-	writer io.Writer,
-) error {
-	switch compression {
-	case CompressionZstd:
-		return decompressZstdStream(reader, writer)
-	case CompressionGzip:
-		return decompressGzipStream(reader, writer)
-	case CompressionNone:
-		_, err := io.Copy(writer, reader)
-		if err != nil {
-			return fmt.Errorf("failed to write chunks: %w", err)
-		}
-	default:
-		return fmt.Errorf("unsupported compression type %d", compression)
-	}
-	return nil
-}
-
-func decompressGzipStream(reader io.Reader, writer io.Writer) error {
-	gr, err := gzip.NewReader(reader)
-	if err != nil {
-		return fmt.Errorf("failed to create gzip reader: %w", err)
-	}
-	defer gr.Close()
-
-	_, err = io.Copy(writer, gr)
-	return err
-}
-
-func decompressZstdStream(reader io.Reader, writer io.Writer) error {
-	zr, err := zstd.NewReader(reader)
-	if err != nil {
-		return fmt.Errorf("failed to create zstd reader: %w", err)
-	}
-	defer zr.Close()
-
-	_, err = io.Copy(writer, zr)
-	return err
 }
