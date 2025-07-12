@@ -7,12 +7,14 @@ edition = "2024"
 anyhow = "1.0"
 async-trait = "0.1"
 axum = "0.8"
+axum-extra = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
 config = "0.15"
 dashmap = "6.1"
 deadpool-postgres = "0.14"
 futures = "0.3"
 futures-batch = "0.6"
+garde = { version = "0.22", features = ["derive"] }
 jsonpath-rust = "1.0"
 mongodb = "3.2"
 rusqlite = { version = "0.32", features = [
@@ -43,4 +45,3 @@ tower-http = { version = "0.6", features = [
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.0", features = ["serde", "v4"] }
-validator = { version = "0.20", features = ["derive"] }

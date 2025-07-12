@@ -2,6 +2,7 @@ pub mod entities;
 pub mod health;
 pub mod oplogs;
 mod snapshot;
+mod with_rejection;
 
 use anyhow::Result;
 use axum::{Router, routing::get};
@@ -42,6 +43,7 @@ impl ApiServer {
             entity_manager: Arc::clone(&self.entity_manager),
             oplog_db: self.oplog_db.clone(),
             snapshot_manager: Arc::clone(&self.snapshot_manager),
+            config: self.config.clone(),
         };
 
         let app = Router::new()
@@ -69,4 +71,5 @@ pub struct AppState {
     pub entity_manager: Arc<EntityManager>,
     pub oplog_db: OplogDatabase,
     pub snapshot_manager: Arc<SnapshotManager>,
+    pub config: Configs,
 }
