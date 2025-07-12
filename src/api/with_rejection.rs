@@ -1,9 +1,11 @@
 use axum::{
     Json,
-    extract::rejection::{JsonRejection, QueryRejection},
-    response::IntoResponse,
+    extract::rejection::JsonRejection,
+    http::StatusCode,
+    response::{IntoResponse, Response},
 };
 use serde_json::json;
+use serde_qs::axum::QsQueryRejection;
 use thiserror::Error;
 
 // We derive `thiserror::Error`
@@ -14,16 +16,16 @@ pub enum ApiError {
     #[error(transparent)]
     JsonExtractorRejection(#[from] JsonRejection),
     #[error(transparent)]
-    QueryExtractorRejection(#[from] QueryRejection),
+    QsQueryExtractorRejection(#[from] QsQueryRejection),
 }
 
 // We implement `IntoResponse` so ApiError can be used as a response
 impl IntoResponse for ApiError {
-    fn into_response(self) -> axum::response::Response {
+    fn into_response(self) -> Response {
         let (status, message) = match self {
             ApiError::JsonExtractorRejection(json_rejection) => (json_rejection.status(), json_rejection.body_text()),
-            ApiError::QueryExtractorRejection(query_rejection) => {
-                (query_rejection.status(), query_rejection.body_text())
+            ApiError::QsQueryExtractorRejection(query_rejection) => {
+                (StatusCode::BAD_REQUEST, query_rejection.to_string())
             }
         };
 

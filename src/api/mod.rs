@@ -9,6 +9,7 @@ use axum::{Router, routing::get};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::compression::CompressionLayer;
+use tower_http::trace::TraceLayer;
 use tracing::info;
 
 use crate::config::Configs;
@@ -52,6 +53,7 @@ impl ApiServer {
             .merge(oplogs::router())
             .merge(snapshot::router())
             .layer(CompressionLayer::new().gzip(true).zstd(true))
+            .layer(TraceLayer::new_for_http())
             .with_state(state);
 
         let app = Router::new().nest("/api", app);

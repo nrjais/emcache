@@ -1,14 +1,9 @@
-use axum::{
-    Router,
-    extract::{Query, State},
-    http::StatusCode,
-    response::Json,
-    routing::get,
-};
+use axum::{Router, extract::State, http::StatusCode, response::Json, routing::get};
 use axum_extra::extract::WithRejection;
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
+use serde_qs::web::QsQuery;
 use tracing::error;
 
 use super::AppState;
@@ -22,7 +17,7 @@ pub fn router() -> Router<AppState> {
 
 async fn get_oplogs(
     State(state): State<AppState>,
-    WithRejection(Query(params), _): WithRejection<Query<OplogRequest>, ApiError>,
+    WithRejection(QsQuery(params), _): WithRejection<QsQuery<OplogRequest>, ApiError>,
 ) -> Result<Json<Vec<Oplog>>, (StatusCode, Json<JsonValue>)> {
     if let Err(e) = params.validate() {
         let errors = e
@@ -69,8 +64,8 @@ pub struct OplogRequest {
     pub from: i64,
     #[garde(range(min = 1, max = 10000))]
     pub limit: i64,
-    #[serde(default)]
     #[garde(length(min = 1))]
+    #[serde(alias = "entities[]")]
     pub entities: Vec<String>,
 }
 
