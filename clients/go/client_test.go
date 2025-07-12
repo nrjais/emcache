@@ -64,7 +64,7 @@ func setupTestClient() (*Client, *MockRoundTripper) {
 	config := Config{
 		ServerURL:    "http://test-server",
 		Directory:    "/test/dir",
-		Collections:  []string{},
+		Entities:     []string{},
 		SyncInterval: time.Second,
 		BatchSize:    10,
 		Logger:       slog.Default(),
@@ -77,7 +77,7 @@ func setupTestClient() (*Client, *MockRoundTripper) {
 	client := &Client{
 		config:       config,
 		entities:     make(map[string]*entityState),
-		colNames:     []string{"test-entity"},
+		entityNames:  []string{"test-entity"},
 		lastOplogIdx: 0,
 		httpClient:   restyClient,
 		logger:       slog.Default(),
@@ -106,7 +106,7 @@ func setupTestClientWithMock(mockFunc func(req *http.Request) (*http.Response, e
 	config := Config{
 		ServerURL:    "http://test-server",
 		Directory:    "/test/dir",
-		Collections:  []string{"test-entity"},
+		Entities:     []string{"test-entity"},
 		SyncInterval: time.Second,
 		BatchSize:    10,
 		Logger:       slog.Default(),
@@ -119,7 +119,7 @@ func setupTestClientWithMock(mockFunc func(req *http.Request) (*http.Response, e
 	client := &Client{
 		config:       config,
 		entities:     make(map[string]*entityState),
-		colNames:     []string{"test-entity"},
+		entityNames:  []string{"test-entity"},
 		lastOplogIdx: 50,
 		httpClient:   restyClient,
 		logger:       slog.Default(),
@@ -153,7 +153,7 @@ func TestNewClientWithDependencies_InvalidUpdateInterval(t *testing.T) {
 	config := Config{
 		ServerURL:    "",
 		Directory:    "",
-		Collections:  []string{},
+		Entities:     []string{},
 		SyncInterval: 0,
 		BatchSize:    0,
 	}

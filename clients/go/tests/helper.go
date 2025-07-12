@@ -52,7 +52,7 @@ func syncToLatest(t *testing.T, client *emcache.Client) {
 	require.NoError(t, err, "Failed to sync to latest")
 }
 
-func createClient(t *testing.T, ctx context.Context, collections ...string) (*emcache.Client, error) {
+func createClient(t *testing.T, ctx context.Context, entities ...string) (*emcache.Client, error) {
 	t.Helper()
 
 	clientCtx, clientCancel := context.WithTimeout(ctx, 15*time.Second)
@@ -61,12 +61,12 @@ func createClient(t *testing.T, ctx context.Context, collections ...string) (*em
 	client := emcache.NewClient(clientCtx, emcache.Config{
 		ServerURL:    emcacheServerURL,
 		Directory:    t.TempDir(),
-		Collections:  collections,
+		Entities:     entities,
 		SyncInterval: 1 * time.Second,
 		BatchSize:    100,
 	})
 
-	if len(collections) > 0 {
+	if len(entities) > 0 {
 		err := client.Initialize(clientCtx)
 		require.NoError(t, err, "Failed to initialize emcache client")
 		err = client.SyncOnce(ctx)
@@ -83,21 +83,21 @@ func createClient(t *testing.T, ctx context.Context, collections ...string) (*em
 	return client, nil
 }
 
-// setupSyncedCollection creates a collection with default shape and initial docs
-func setupSyncedCollection(t *testing.T, ctx context.Context, numInitialDocs int, collectionName string) ([]TestDoc, *emcache.Client) {
+// setupSyncedEntity creates an entity with default shape and initial docs
+func setupSyncedEntity(t *testing.T, ctx context.Context, numInitialDocs int, entityName string) ([]TestDoc, *emcache.Client) {
 	t.Helper()
-	initialDocs, emcacheClient := setupCollectionWithShape(t, ctx, numInitialDocs, collectionName, defaultTestDocShape())
+	initialDocs, emcacheClient := setupEntityWithShape(t, ctx, numInitialDocs, entityName, defaultTestDocShape())
 	return initialDocs, emcacheClient
 }
 
-func verifyDocsInSQLite(t *testing.T, client *emcache.Client, collectionName string, expectedDocs map[string]TestDoc) {
+func verifyDocsInSQLite(t *testing.T, client *emcache.Client, entityName string, expectedDocs map[string]TestDoc) {
 	t.Helper()
 	ctx := context.Background()
 	query := "SELECT id, name, age FROM data"
 	foundDocs := make(map[string]TestDoc)
 
-	db, err := client.DB(ctx, collectionName)
-	require.NoError(t, err, "Failed to get database for collection")
+	db, err := client.DB(ctx, entityName)
+	require.NoError(t, err, "Failed to get database for entity")
 
 	rows, err := db.QueryContext(ctx, query)
 	require.NoError(t, err, "Failed to execute query via client")
@@ -145,7 +145,7 @@ func nestedFieldsDocShape() emcache.Shape {
 	}
 }
 
-func setupCollectionWithShape(t *testing.T, ctx context.Context, numInitialDocs int, collectionName string, shape emcache.Shape) ([]TestDoc, *emcache.Client) {
+func setupEntityWithShape(t *testing.T, ctx context.Context, numInitialDocs int, entityName string, shape emcache.Shape) ([]TestDoc, *emcache.Client) {
 	t.Helper()
 
 	initialDocs := make([]TestDoc, 0, numInitialDocs)
@@ -157,26 +157,26 @@ func setupCollectionWithShape(t *testing.T, ctx context.Context, numInitialDocs 
 		})
 	}
 
-	client := setupCollectionWithShapeAndDocs(t, ctx, collectionName, shape, initialDocs)
+	client := setupEntityWithShapeAndDocs(t, ctx, entityName, shape, initialDocs)
 	return initialDocs, client
 }
 
-func setupCollectionWithShapeAndDocs[T any](t *testing.T, ctx context.Context, collectionName string, shape emcache.Shape, initialDocs []T) *emcache.Client {
-	collection := mongoClient.Database(mongoDBName).Collection(collectionName)
+func setupEntityWithShapeAndDocs[T any](t *testing.T, ctx context.Context, entityName string, shape emcache.Shape, initialDocs []T) *emcache.Client {
+	collection := mongoClient.Database(mongoDBName).Collection(entityName)
 	emcacheAdminClient, err := createClient(t, ctx)
 	require.NoError(t, err, "Failed to create emcache client")
 
 	_, err = emcacheAdminClient.CreateEntity(ctx, emcache.CreateEntityRequest{
-		Name:   collectionName,
+		Name:   entityName,
 		Client: "main",
-		Source: collectionName,
+		Source: entityName,
 		Shape:  shape,
 	})
 	require.NoError(t, err, "Failed to call AddEntity with custom shape before client init")
 
 	t.Cleanup(func() {
-		err := emcacheAdminClient.RemoveEntity(context.Background(), collectionName)
-		require.NoError(t, err, "Failed to remove collection from Emcache")
+		err := emcacheAdminClient.RemoveEntity(context.Background(), entityName)
+		require.NoError(t, err, "Failed to remove entity from Emcache")
 
 		err = collection.Drop(context.Background())
 		require.NoError(t, err, "Failed to drop collection from MongoDB")
@@ -192,7 +192,7 @@ func setupCollectionWithShapeAndDocs[T any](t *testing.T, ctx context.Context, c
 		time.Sleep(5 * time.Second)
 	}
 
-	emcacheClient, err := createClient(t, ctx, collectionName)
+	emcacheClient, err := createClient(t, ctx, entityName)
 	require.NoError(t, err, "Failed to create emcache client")
 
 	return emcacheClient

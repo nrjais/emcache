@@ -46,22 +46,22 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func setupTestCollection(t *testing.T, numDocs int) (string, []TestDoc, *mongo.Collection, map[string]TestDoc) {
+func setupTestEntity(t *testing.T, numDocs int) (string, []TestDoc, *mongo.Collection, map[string]TestDoc) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	collectionName := fmt.Sprintf("test_%s_%s", t.Name(), uniqueId)
-	initialDocsSlice, _ := setupSyncedCollection(t, ctx, numDocs, collectionName)
+	entityName := fmt.Sprintf("test_%s_%s", t.Name(), uniqueId)
+	initialDocsSlice, _ := setupSyncedEntity(t, ctx, numDocs, entityName)
 
 	expectedDocs := make(map[string]TestDoc)
 	for _, doc := range initialDocsSlice {
 		expectedDocs[doc.ID] = doc
 	}
 
-	collection := mongoClient.Database(mongoDBName).Collection(collectionName)
+	collection := mongoClient.Database(mongoDBName).Collection(entityName)
 
-	return collectionName, initialDocsSlice, collection, expectedDocs
+	return entityName, initialDocsSlice, collection, expectedDocs
 }
 
 func TestInitialSync(t *testing.T) {
@@ -69,33 +69,33 @@ func TestInitialSync(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	collectionName := "test_initial_sync_" + uniqueId
+	entityName := "test_initial_sync_" + uniqueId
 	numInitial := 2
-	initialDocsSlice, emcacheClient := setupSyncedCollection(t, ctx, numInitial, collectionName)
+	initialDocsSlice, emcacheClient := setupSyncedEntity(t, ctx, numInitial, entityName)
 
 	initialDocsMap := make(map[string]TestDoc)
 	for _, doc := range initialDocsSlice {
 		initialDocsMap[doc.ID] = doc
 	}
 
-	verifyDocsInSQLite(t, emcacheClient, collectionName, initialDocsMap)
+	verifyDocsInSQLite(t, emcacheClient, entityName, initialDocsMap)
 }
 
-func TestEmptyCollectionSync(t *testing.T) {
+func TestEmptyEntitySync(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	collectionName := "test_empty_collection_sync_" + uniqueId
+	entityName := "test_empty_entity_sync_" + uniqueId
 	numInitial := 0
-	initialDocsSlice, emcacheClient := setupSyncedCollection(t, ctx, numInitial, collectionName)
+	initialDocsSlice, emcacheClient := setupSyncedEntity(t, ctx, numInitial, entityName)
 
 	initialDocsMap := make(map[string]TestDoc)
 	for _, doc := range initialDocsSlice {
 		initialDocsMap[doc.ID] = doc
 	}
 
-	verifyDocsInSQLite(t, emcacheClient, collectionName, nil)
+	verifyDocsInSQLite(t, emcacheClient, entityName, nil)
 }
 
 func TestInsertSync(t *testing.T) {
@@ -103,8 +103,8 @@ func TestInsertSync(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	collectionName, _, collection, expectedDocs := setupTestCollection(t, 1)
-	emcacheClient, err := createClient(t, ctx, collectionName)
+	entityName, _, collection, expectedDocs := setupTestEntity(t, 1)
+	emcacheClient, err := createClient(t, ctx, entityName)
 	require.NoError(t, err, "Failed to create emcache client")
 
 	newDocs := []any{
@@ -121,7 +121,7 @@ func TestInsertSync(t *testing.T) {
 	}
 
 	syncToLatest(t, emcacheClient)
-	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
+	verifyDocsInSQLite(t, emcacheClient, entityName, expectedDocs)
 }
 
 func TestUpdateSync(t *testing.T) {
@@ -129,8 +129,8 @@ func TestUpdateSync(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	collectionName, initialDocs, collection, expectedDocs := setupTestCollection(t, 2)
-	emcacheClient, err := createClient(t, ctx, collectionName)
+	entityName, initialDocs, collection, expectedDocs := setupTestEntity(t, 2)
+	emcacheClient, err := createClient(t, ctx, entityName)
 	require.NoError(t, err, "Failed to create emcache client")
 
 	docToUpdate := initialDocs[0]
@@ -145,7 +145,7 @@ func TestUpdateSync(t *testing.T) {
 	expectedDocs[docToUpdate.ID] = TestDoc{ID: docToUpdate.ID, Name: updatedName, Age: updatedAge}
 
 	syncToLatest(t, emcacheClient)
-	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
+	verifyDocsInSQLite(t, emcacheClient, entityName, expectedDocs)
 }
 
 func TestDeleteSync(t *testing.T) {
@@ -153,8 +153,8 @@ func TestDeleteSync(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	collectionName, initialDocs, collection, expectedDocs := setupTestCollection(t, 3)
-	emcacheClient, err := createClient(t, ctx, collectionName)
+	entityName, initialDocs, collection, expectedDocs := setupTestEntity(t, 3)
+	emcacheClient, err := createClient(t, ctx, entityName)
 	require.NoError(t, err, "Failed to create emcache client")
 
 	docsToDelete := initialDocs[:2]
@@ -169,7 +169,7 @@ func TestDeleteSync(t *testing.T) {
 	}
 
 	syncToLatest(t, emcacheClient)
-	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
+	verifyDocsInSQLite(t, emcacheClient, entityName, expectedDocs)
 }
 
 func TestUpsertSync(t *testing.T) {
@@ -177,8 +177,8 @@ func TestUpsertSync(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	collectionName, initialDocs, collection, expectedDocs := setupTestCollection(t, 2)
-	emcacheClient, err := createClient(t, ctx, collectionName)
+	entityName, initialDocs, collection, expectedDocs := setupTestEntity(t, 2)
+	emcacheClient, err := createClient(t, ctx, entityName)
 	require.NoError(t, err, "Failed to create emcache client")
 
 	docToUpdate := initialDocs[0]
@@ -202,7 +202,7 @@ func TestUpsertSync(t *testing.T) {
 	expectedDocs[newDocID] = newDoc
 
 	syncToLatest(t, emcacheClient)
-	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
+	verifyDocsInSQLite(t, emcacheClient, entityName, expectedDocs)
 }
 
 func TestPartialUpdateSync(t *testing.T) {
@@ -210,8 +210,8 @@ func TestPartialUpdateSync(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	collectionName, initialDocs, collection, expectedDocs := setupTestCollection(t, 3)
-	emcacheClient, err := createClient(t, ctx, collectionName)
+	entityName, initialDocs, collection, expectedDocs := setupTestEntity(t, 3)
+	emcacheClient, err := createClient(t, ctx, entityName)
 	require.NoError(t, err, "Failed to create emcache client")
 
 	docToUpdate := initialDocs[0]
@@ -224,7 +224,7 @@ func TestPartialUpdateSync(t *testing.T) {
 
 	expectedDocs[docToUpdate.ID] = TestDoc{ID: docToUpdate.ID, Name: updatedName, Age: docToUpdate.Age}
 	syncToLatest(t, emcacheClient)
-	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
+	verifyDocsInSQLite(t, emcacheClient, entityName, expectedDocs)
 
 	updatedAge := docToUpdate.Age + 15
 	update = bson.M{"$set": bson.M{"age": updatedAge}}
@@ -233,7 +233,7 @@ func TestPartialUpdateSync(t *testing.T) {
 
 	expectedDocs[docToUpdate.ID] = TestDoc{ID: docToUpdate.ID, Name: updatedName, Age: updatedAge}
 	syncToLatest(t, emcacheClient)
-	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
+	verifyDocsInSQLite(t, emcacheClient, entityName, expectedDocs)
 
 }
 
@@ -242,8 +242,8 @@ func TestDeleteAllSync(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	collectionName, _, collection, _ := setupTestCollection(t, 5)
-	emcacheClient, err := createClient(t, ctx, collectionName)
+	entityName, _, collection, _ := setupTestEntity(t, 5)
+	emcacheClient, err := createClient(t, ctx, entityName)
 	require.NoError(t, err, "Failed to create emcache client")
 
 	filter := bson.M{}
@@ -253,7 +253,7 @@ func TestDeleteAllSync(t *testing.T) {
 	expectedDocs := make(map[string]TestDoc)
 
 	syncToLatest(t, emcacheClient)
-	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
+	verifyDocsInSQLite(t, emcacheClient, entityName, expectedDocs)
 }
 
 func TestBulkInsertSync(t *testing.T) {
@@ -261,18 +261,14 @@ func TestBulkInsertSync(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	collectionName, _, collection, expectedDocs := setupTestCollection(t, 2)
-	emcacheClient, err := createClient(t, ctx, collectionName)
+	entityName, _, collection, expectedDocs := setupTestEntity(t, 2)
+	emcacheClient, err := createClient(t, ctx, entityName)
 	require.NoError(t, err, "Failed to create emcache client")
 
 	bulkSize := 100
 	newDocs := make([]any, bulkSize)
 	for i := 0; i < bulkSize; i++ {
-		doc := TestDoc{
-			ID:   uuid.NewString(),
-			Name: fmt.Sprintf("BulkDoc_%d", i),
-			Age:  30 + (i % 50),
-		}
+		doc := TestDoc{ID: uuid.NewString(), Name: fmt.Sprintf("BulkDoc_%d", i), Age: 30 + i}
 		newDocs[i] = doc
 		expectedDocs[doc.ID] = doc
 	}
@@ -281,7 +277,7 @@ func TestBulkInsertSync(t *testing.T) {
 	require.NoError(t, err, "Failed to insert bulk documents into MongoDB")
 
 	syncToLatest(t, emcacheClient)
-	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
+	verifyDocsInSQLite(t, emcacheClient, entityName, expectedDocs)
 }
 
 func TestReplaceDocSync(t *testing.T) {
@@ -289,15 +285,15 @@ func TestReplaceDocSync(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	collectionName, initialDocs, collection, expectedDocs := setupTestCollection(t, 3)
-	emcacheClient, err := createClient(t, ctx, collectionName)
+	entityName, initialDocs, collection, expectedDocs := setupTestEntity(t, 3)
+	emcacheClient, err := createClient(t, ctx, entityName)
 	require.NoError(t, err, "Failed to create emcache client")
 
-	docToReplace := initialDocs[1]
+	docToReplace := initialDocs[0]
 	replacementDoc := TestDoc{
 		ID:   docToReplace.ID,
-		Name: "Completely Replaced Doc",
-		Age:  99,
+		Name: "Replaced " + docToReplace.Name,
+		Age:  docToReplace.Age * 2,
 	}
 
 	filter := bson.M{"_id": docToReplace.ID}
@@ -307,7 +303,7 @@ func TestReplaceDocSync(t *testing.T) {
 	expectedDocs[docToReplace.ID] = replacementDoc
 
 	syncToLatest(t, emcacheClient)
-	verifyDocsInSQLite(t, emcacheClient, collectionName, expectedDocs)
+	verifyDocsInSQLite(t, emcacheClient, entityName, expectedDocs)
 }
 
 func TestNestedFieldsSync(t *testing.T) {
@@ -315,7 +311,7 @@ func TestNestedFieldsSync(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
-	collectionName := "test_nested_fields_sync_" + uniqueId
+	entityName := "test_nested_fields_sync_" + uniqueId
 
 	type Address struct {
 		Street string `bson:"street" json:"street"`
@@ -354,13 +350,13 @@ func TestNestedFieldsSync(t *testing.T) {
 		Tags: []string{"test", "nested", "document"},
 	}
 
-	emcacheClient := setupCollectionWithShapeAndDocs(t, ctx, collectionName, nestedFieldsDocShape(), []NestedDoc{nestedDoc})
+	emcacheClient := setupEntityWithShapeAndDocs(t, ctx, entityName, nestedFieldsDocShape(), []NestedDoc{nestedDoc})
 
-	collection := mongoClient.Database(mongoDBName).Collection(collectionName)
+	collection := mongoClient.Database(mongoDBName).Collection(entityName)
 
 	query := `SELECT id, name, age, email, phone, street, city, zip, tags FROM data WHERE id = ?`
-	db, err := emcacheClient.DB(ctx, collectionName)
-	require.NoError(t, err, "Failed to get database for collection")
+	db, err := emcacheClient.DB(ctx, entityName)
+	require.NoError(t, err, "Failed to get database for entity")
 
 	rows, err := db.QueryContext(ctx, query, docID)
 	require.NoError(t, err, "Failed to execute query via client")
@@ -397,8 +393,8 @@ func TestNestedFieldsSync(t *testing.T) {
 
 	syncToLatest(t, emcacheClient)
 
-	db, err = emcacheClient.DB(ctx, collectionName)
-	require.NoError(t, err, "Failed to get database for collection")
+	db, err = emcacheClient.DB(ctx, entityName)
+	require.NoError(t, err, "Failed to get database for entity")
 
 	rows, err = db.QueryContext(ctx, query, docID)
 	require.NoError(t, err, "Failed to execute query via client")

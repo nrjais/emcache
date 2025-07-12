@@ -8,7 +8,7 @@
 //	client, err := emcache.NewClient(ctx, emcache.Config{
 //	    ServerURL: "http://localhost:8080",
 //	    Directory: "./cache",
-//	    Collections: []string{"users", "products"},
+//	    Entities: []string{"users", "products"},
 //	})
 //	if err != nil {
 //	    log.Fatal(err)
@@ -145,8 +145,8 @@ type Config struct {
 	// Directory is the local directory where SQLite databases will be stored
 	Directory string
 
-	// Collections is the list of entity names to sync
-	Collections []string
+	// Entities is the list of entity names to sync
+	Entities []string
 
 	// SyncInterval is how often to check for updates (default: 30 seconds)
 	SyncInterval time.Duration
@@ -170,7 +170,7 @@ type entityState struct {
 type Client struct {
 	config       Config
 	entities     map[string]*entityState
-	colNames     []string
+	entityNames  []string
 	lastOplogIdx int64
 	cancelFunc   context.CancelFunc
 	stopWg       sync.WaitGroup
@@ -198,11 +198,11 @@ func NewClient(ctx context.Context, config Config) *Client {
 	httpClient.SetOutputDirectory(config.Directory)
 
 	client := &Client{
-		config:     config,
-		entities:   make(map[string]*entityState),
-		colNames:   config.Collections,
-		httpClient: httpClient,
-		logger:     config.Logger,
+		config:      config,
+		entities:    make(map[string]*entityState),
+		entityNames: config.Entities,
+		httpClient:  httpClient,
+		logger:      config.Logger,
 	}
 
 	return client
@@ -227,8 +227,8 @@ func (c *Client) validateConfig() error {
 	if c.config.Directory == "" {
 		return fmt.Errorf("directory is required")
 	}
-	if len(c.colNames) == 0 {
-		return fmt.Errorf("no collections specified")
+	if len(c.entityNames) == 0 {
+		return fmt.Errorf("no entities specified")
 	}
 
 	return nil
@@ -384,7 +384,7 @@ func (c *Client) closeConnections() error {
 }
 
 // getEntitiesFromServer retrieves entities from the server
-func (c *Client) getEntitiesFromServer(ctx context.Context, collections []string) ([]Entity, error) {
+func (c *Client) getEntitiesFromServer(ctx context.Context, entityNames []string) ([]Entity, error) {
 	url := fmt.Sprintf("%s/api/entities", c.config.ServerURL)
 	var entities []Entity
 	var errorResponse ErrorResponse
@@ -403,16 +403,16 @@ func (c *Client) getEntitiesFromServer(ctx context.Context, collections []string
 		return nil, fmt.Errorf("failed to get entities: %w", errorResponse)
 	}
 
-	// Filter entities by requested collection names if provided
-	if len(collections) > 0 {
-		collectionSet := make(map[string]bool)
-		for _, name := range collections {
-			collectionSet[name] = true
+	// Filter entities by requested entity names if provided
+	if len(entityNames) > 0 {
+		entitySet := make(map[string]bool)
+		for _, name := range entityNames {
+			entitySet[name] = true
 		}
 
 		filtered := make([]Entity, 0, len(entities))
 		for _, entity := range entities {
-			if collectionSet[entity.Name] {
+			if entitySet[entity.Name] {
 				filtered = append(filtered, entity)
 			}
 		}
@@ -430,8 +430,8 @@ func (c *Client) initializeEntity(ctx context.Context, entityName string, entiti
 
 // initialize sets up the client's internal state
 func (c *Client) initialize(ctx context.Context) error {
-	if len(c.colNames) == 0 {
-		c.logger.Info("No collections specified, skipping initialization")
+	if len(c.entityNames) == 0 {
+		c.logger.Info("No entities specified, skipping initialization")
 		return nil
 	}
 
@@ -439,13 +439,13 @@ func (c *Client) initialize(ctx context.Context) error {
 		return fmt.Errorf("failed to create directory %s: %w", c.config.Directory, err)
 	}
 
-	entitiesData, err := c.getEntitiesFromServer(ctx, c.colNames)
+	entitiesData, err := c.getEntitiesFromServer(ctx, c.entityNames)
 	if err != nil {
 		return fmt.Errorf("failed to get entities from server: %w", err)
 	}
 
 	// Initialize entities in parallel
-	results := lop.Map(c.config.Collections, func(entityName string, _ int) lo.Tuple2[*entityState, error] {
+	results := lop.Map(c.config.Entities, func(entityName string, _ int) lo.Tuple2[*entityState, error] {
 		state, err := c.initializeEntity(ctx, entityName, entitiesData)
 		return lo.T2(state, err)
 	})
@@ -688,7 +688,7 @@ func (c *Client) syncBatches(ctx context.Context, batchCount int) (bool, error) 
 	for i := 0; i < batchCount; i++ {
 		c.logger.Info("Syncing batch", "batch_number", i+1, "current_offset", currentOffset)
 
-		entries, err := c.getOplogEntries(ctx, c.colNames, currentOffset)
+		entries, err := c.getOplogEntries(ctx, c.entityNames, currentOffset)
 		if err != nil {
 			return false, fmt.Errorf("failed to get oplog entries for batch %d: %w", i+1, err)
 		}
