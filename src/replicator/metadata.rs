@@ -2,7 +2,7 @@ use rusqlite::{Connection, params};
 use std::sync::{Arc, Mutex};
 
 const META_TABLE_NAME: &str = "meta";
-const LAST_PROCESSED_ID: &str = "last_processed_id";
+const MAX_OPLOG_ID: &str = "max_oplog_id";
 
 pub struct MetadataDb {
     db: Arc<Mutex<Connection>>,
@@ -19,12 +19,12 @@ impl MetadataDb {
         Ok(db)
     }
 
-    pub fn get_last_processed_id(&self) -> anyhow::Result<i64> {
+    pub fn max_oplog_id(&self) -> anyhow::Result<i64> {
         let conn = self.db.lock().unwrap();
         let query = format!("SELECT value FROM {META_TABLE_NAME} WHERE key = ?");
 
         let mut stmt = conn.prepare(&query)?;
-        let result: Result<i64, rusqlite::Error> = stmt.query_row(params![LAST_PROCESSED_ID], |row| row.get(0));
+        let result: Result<i64, rusqlite::Error> = stmt.query_row(params![MAX_OPLOG_ID], |row| row.get(0));
 
         match result {
             Ok(value) => Ok(value),
@@ -33,13 +33,13 @@ impl MetadataDb {
         }
     }
 
-    pub fn set_last_processed_id(&self, last_processed_id: i64) -> anyhow::Result<()> {
+    pub fn set_max_oplog_id(&self, max_oplog_id: i64) -> anyhow::Result<()> {
         let conn = self.db.lock().unwrap();
         let query = format!(
             "INSERT INTO {META_TABLE_NAME} (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         );
 
-        conn.execute(&query, params![LAST_PROCESSED_ID, last_processed_id])?;
+        conn.execute(&query, params![MAX_OPLOG_ID, max_oplog_id])?;
         Ok(())
     }
 

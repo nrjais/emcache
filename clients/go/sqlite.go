@@ -3,6 +3,7 @@ package emcache
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -10,17 +11,16 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// LocalCache manages individual entity state and operations
 type LocalCache interface {
 	DB() *sql.DB
-	GetLastAppliedOplogIndex(ctx context.Context) (int64, error)
-	ApplyOplogEntries(ctx context.Context, entries []Oplog) error
+	GetMaxOplogId(ctx context.Context) (int64, error)
+	ApplyOplogs(ctx context.Context, oplogs []Oplog) error
 	Close() error
 }
 
 const (
 	metadataTableName = "metadata"
-	lastAppliedIdxKey = "last_processed_id"
+	maxOplogId        = "max_oplog_id"
 )
 const (
 	dataTableName = "data"
@@ -54,14 +54,14 @@ func (e *localCache) DB() *sql.DB {
 	return e.db
 }
 
-// GetLastAppliedOplogIndex retrieves the last processed oplog ID from metadata
-func (e *localCache) GetLastAppliedOplogIndex(ctx context.Context) (int64, error) {
+// GetMaxOplogId retrieves the last processed oplog ID from metadata
+func (e *localCache) GetMaxOplogId(ctx context.Context) (int64, error) {
 	if e.db == nil {
 		return 0, fmt.Errorf("database connection is not available")
 	}
 
 	query := fmt.Sprintf("SELECT value FROM %s WHERE key = ?", metadataTableName)
-	row := e.db.QueryRowContext(ctx, query, lastAppliedIdxKey)
+	row := e.db.QueryRowContext(ctx, query, maxOplogId)
 
 	var value string
 	if err := row.Scan(&value); err != nil {
@@ -79,13 +79,13 @@ func (e *localCache) GetLastAppliedOplogIndex(ctx context.Context) (int64, error
 	return idx, nil
 }
 
-// ApplyOplogEntries applies a batch of oplog entries to the SQLite database
-func (e *localCache) ApplyOplogEntries(ctx context.Context, entries []Oplog) error {
+// ApplyOplogs applies a batch of oplogs to the SQLite database
+func (e *localCache) ApplyOplogs(ctx context.Context, oplogs []Oplog) error {
 	if e.db == nil {
 		return fmt.Errorf("database connection is not available")
 	}
 
-	if len(entries) == 0 {
+	if len(oplogs) == 0 {
 		return nil
 	}
 
@@ -97,7 +97,7 @@ func (e *localCache) ApplyOplogEntries(ctx context.Context, entries []Oplog) err
 
 	var maxProcessedID int64
 
-	for _, entry := range entries {
+	for _, entry := range oplogs {
 		if entry.ID > maxProcessedID {
 			maxProcessedID = entry.ID
 		}
@@ -150,7 +150,11 @@ func (e *localCache) applyUpsert(ctx context.Context, tx *sql.Tx, entry Oplog, p
 		if i < len(entry.Data) {
 			columns = append(columns, quoteIdentifier(column.Name))
 			placeholders = append(placeholders, "?")
-			values = append(values, entry.Data[i])
+			encodedValue, err := encodeValue(entry.Data[i])
+			if err != nil {
+				return fmt.Errorf("failed to encode value for column %s: %w", column.Name, err)
+			}
+			values = append(values, encodedValue)
 		}
 	}
 
@@ -185,10 +189,24 @@ func (e *localCache) setLastProcessedID(ctx context.Context, tx *sql.Tx, lastPro
 		"INSERT INTO %s (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
 		metadataTableName,
 	)
-	_, err := tx.ExecContext(ctx, query, lastAppliedIdxKey, strconv.FormatInt(lastProcessedID, 10))
+	_, err := tx.ExecContext(ctx, query, maxOplogId, strconv.FormatInt(lastProcessedID, 10))
 	return err
 }
 
 func quoteIdentifier(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
+func encodeValue(value any) (any, error) {
+	switch value := value.(type) {
+	case int, int8, int16, int32, int64, float32, float64, string:
+		return value, nil
+	case bool:
+		if value {
+			return 1, nil
+		}
+		return 0, nil
+	default:
+		return json.Marshal(value)
+	}
 }

@@ -64,7 +64,6 @@ const (
 	DataTypeNumber  DataType = "number"
 	DataTypeInteger DataType = "integer"
 	DataTypeString  DataType = "string"
-	DataTypeBytes   DataType = "bytes"
 )
 
 // ID column types
@@ -182,11 +181,7 @@ type Client struct {
 }
 
 // NewClient creates a new EmCache client with the given configuration.
-func NewClient(ctx context.Context, config Config) (*Client, error) {
-	if err := validateConfig(config); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
-	}
-
+func NewClient(ctx context.Context, config Config) *Client {
 	if config.SyncInterval == 0 {
 		config.SyncInterval = 30 * time.Second
 	}
@@ -210,11 +205,33 @@ func NewClient(ctx context.Context, config Config) (*Client, error) {
 		logger:     config.Logger,
 	}
 
-	if err := client.initialize(ctx); err != nil {
-		return nil, fmt.Errorf("failed to initialize client: %w", err)
+	return client
+}
+
+func (c *Client) Initialize(ctx context.Context) error {
+	if err := c.validateConfig(); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	return client, nil
+	if err := os.MkdirAll(c.config.Directory, 0755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", c.config.Directory, err)
+	}
+
+	return c.initialize(ctx)
+}
+
+func (c *Client) validateConfig() error {
+	if c.config.ServerURL == "" {
+		return fmt.Errorf("server URL is required")
+	}
+	if c.config.Directory == "" {
+		return fmt.Errorf("directory is required")
+	}
+	if len(c.colNames) == 0 {
+		return fmt.Errorf("no collections specified")
+	}
+
+	return nil
 }
 
 // DB executes a function against the specified entity's database.
@@ -370,10 +387,12 @@ func (c *Client) closeConnections() error {
 func (c *Client) getEntitiesFromServer(ctx context.Context, collections []string) ([]Entity, error) {
 	url := fmt.Sprintf("%s/api/entities", c.config.ServerURL)
 	var entities []Entity
+	var errorResponse ErrorResponse
 
 	resp, err := c.httpClient.R().
 		SetContext(ctx).
 		SetResult(&entities).
+		SetError(&errorResponse).
 		Get(url)
 
 	if err != nil {
@@ -381,7 +400,7 @@ func (c *Client) getEntitiesFromServer(ctx context.Context, collections []string
 	}
 
 	if resp.StatusCode() != 200 {
-		return nil, fmt.Errorf("failed to get entities: HTTP %d", resp.StatusCode())
+		return nil, fmt.Errorf("failed to get entities: %w", errorResponse)
 	}
 
 	// Filter entities by requested collection names if provided
@@ -407,18 +426,6 @@ func (c *Client) getEntitiesFromServer(ctx context.Context, collections []string
 func (c *Client) initializeEntity(ctx context.Context, entityName string, entitiesData []Entity) (*entityState, error) {
 	entityConfig := EntityConfig{Name: entityName}
 	return c.addEntityInternal(ctx, entityConfig, entitiesData)
-}
-
-// validateConfig validates the client configuration
-func validateConfig(config Config) error {
-	if config.ServerURL == "" {
-		return fmt.Errorf("server URL is required")
-	}
-	if config.Directory == "" {
-		return fmt.Errorf("directory is required")
-	}
-
-	return nil
 }
 
 // initialize sets up the client's internal state
@@ -525,7 +532,7 @@ func (c *Client) applyOplogEntries(ctx context.Context, entries []Oplog) (int64,
 			continue
 		}
 
-		err := state.entity.ApplyOplogEntries(ctx, entityEntries)
+		err := state.entity.ApplyOplogs(ctx, entityEntries)
 		if err != nil {
 			return c.lastOplogIdx, fmt.Errorf("failed to apply oplog entries to entity '%s': %w", entityName, err)
 		}
@@ -549,7 +556,7 @@ func (c *Client) initializeLastOplogIdx(ctx context.Context, maxOplogID int64) e
 	minIndex := maxOplogID
 
 	for entityName, state := range c.entities {
-		idx, err := state.entity.GetLastAppliedOplogIndex(ctx)
+		idx, err := state.entity.GetMaxOplogId(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to get last applied oplog index for entity '%s': %w", entityName, err)
 		}
@@ -604,13 +611,15 @@ func (*Client) entityDetails(serverEntities []Entity, entityConfig EntityConfig)
 }
 
 func (c *Client) downloadDb(ctx context.Context, entityConfig EntityConfig) (int64, error) {
-	url := fmt.Sprintf("%s/api/entities/%s/snapshot", c.config.ServerURL, entityConfig.Name)
+	url := fmt.Sprintf("%s/api/snapshot/%s", c.config.ServerURL, entityConfig.Name)
+	var errorResponse ErrorResponse
 
 	resp, err := c.httpClient.R().
 		SetContext(ctx).
 		SetHeader("Accept-Encoding", "zstd, gzip").
 		SetSaveResponse(true).
 		SetOutputFileName(fmt.Sprintf("%s.db", entityConfig.Name)).
+		SetError(&errorResponse).
 		Get(url)
 
 	if err != nil {
@@ -618,7 +627,7 @@ func (c *Client) downloadDb(ctx context.Context, entityConfig EntityConfig) (int
 	}
 
 	if resp.StatusCode() != 200 {
-		return 0, fmt.Errorf("failed to download database: HTTP %d", resp.StatusCode())
+		return 0, fmt.Errorf("failed to download database: %w", errorResponse)
 	}
 
 	return 0, nil
@@ -626,16 +635,18 @@ func (c *Client) downloadDb(ctx context.Context, entityConfig EntityConfig) (int
 
 func (c *Client) getOplogEntries(ctx context.Context, entityNames []string, afterIndex int64) ([]Oplog, error) {
 	var entries []Oplog
+	var errorResponse ErrorResponse
 
 	queryParams := url.Values{
-		"after":  {fmt.Sprint(afterIndex)},
-		"limit":  {fmt.Sprint(c.config.BatchSize)},
-		"entity": entityNames,
+		"from":     {fmt.Sprint(afterIndex)},
+		"limit":    {fmt.Sprint(c.config.BatchSize)},
+		"entities": entityNames,
 	}
 
 	request := c.httpClient.R().
 		SetContext(ctx).
 		SetResult(&entries).
+		SetError(&errorResponse).
 		SetQueryParamsFromValues(queryParams)
 
 	url := fmt.Sprintf("%s/api/oplogs", c.config.ServerURL)
@@ -645,7 +656,7 @@ func (c *Client) getOplogEntries(ctx context.Context, entityNames []string, afte
 	}
 
 	if resp.StatusCode() != 200 {
-		return nil, fmt.Errorf("failed to get oplog entries: HTTP %d", resp.StatusCode())
+		return nil, fmt.Errorf("failed to get oplog entries: %w", errorResponse)
 	}
 
 	return entries, nil

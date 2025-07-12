@@ -50,7 +50,7 @@ impl Replicator {
 
         let mut entities_update = self.entity_manager.broadcast();
         let mut interval = tokio::time::interval(self.interval);
-        let mut last_processed_id = self.meta.get_last_processed_id()?;
+        let mut max_oplog_id = self.meta.max_oplog_id()?;
 
         loop {
             tokio::select! {
@@ -59,7 +59,7 @@ impl Replicator {
                     break;
                 }
                 _ = interval.tick() => {
-                    let processed = self.poll_next(&mut last_processed_id).await;
+                    let processed = self.poll_next(&mut max_oplog_id).await;
                     if processed {
                         interval.reset_immediately();
                     }
@@ -93,8 +93,8 @@ impl Replicator {
         Ok(())
     }
 
-    async fn poll_next(&self, last_processed_id: &mut i64) -> bool {
-        let result = self.process_oplog_batch(*last_processed_id).await;
+    async fn poll_next(&self, max_oplog_id: &mut i64) -> bool {
+        let result = self.process_oplog_batch(*max_oplog_id).await;
 
         let max_processed_id = match result {
             Ok(max_processed_id) => max_processed_id,
@@ -104,21 +104,21 @@ impl Replicator {
             }
         };
 
-        let max_processed_id = max_processed_id.max(*last_processed_id);
-        let count = max_processed_id - *last_processed_id;
-        *last_processed_id = max_processed_id;
+        let current_max_id = max_processed_id.max(*max_oplog_id);
+        let count = current_max_id - *max_oplog_id;
+        *max_oplog_id = current_max_id;
 
-        let _ = self.update_last_processed_id(max_processed_id).await;
-        info!("Processed {} oplogs, last processed id: {}", count, max_processed_id);
+        let _ = self.update_max_oplog_id(current_max_id).await;
+        info!("Processed {} oplogs, last processed id: {}", count, current_max_id);
 
         count > 0
     }
 
-    async fn process_oplog_batch(&self, last_processed_id: i64) -> anyhow::Result<i64> {
-        let oplogs = self.database.get_oplogs(last_processed_id, self.batch_size).await?;
+    async fn process_oplog_batch(&self, max_oplog_id: i64) -> anyhow::Result<i64> {
+        let oplogs = self.database.get_oplogs(max_oplog_id, self.batch_size).await?;
 
         if oplogs.is_empty() {
-            return Ok(last_processed_id);
+            return Ok(max_oplog_id);
         }
 
         debug!("Fetched {} oplogs to process", oplogs.len());
@@ -128,7 +128,7 @@ impl Replicator {
             grouped_oplogs.entry(oplog.entity.clone()).or_default().push(oplog);
         }
 
-        let mut max_processed_id = last_processed_id;
+        let mut max_processed_id = max_oplog_id;
 
         for (entity_name, oplogs) in grouped_oplogs {
             for oplog in &oplogs {
@@ -152,8 +152,8 @@ impl Replicator {
         Ok(())
     }
 
-    async fn update_last_processed_id(&self, max_processed_id: i64) -> anyhow::Result<()> {
-        self.meta.set_last_processed_id(max_processed_id)
+    async fn update_max_oplog_id(&self, max_processed_id: i64) -> anyhow::Result<()> {
+        self.meta.set_max_oplog_id(max_processed_id)
     }
 }
 

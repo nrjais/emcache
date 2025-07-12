@@ -20,13 +20,13 @@ use crate::{
     types::{Entity, Operation, Oplog},
 };
 
-const LAST_PROCESSED_ID_KEY: &str = "last_processed_id";
+const MAX_OPLOG_ID_KEY: &str = "max_oplog_id";
 
 #[derive(Debug, Clone)]
 pub struct LocalCache {
     db: Arc<Mutex<Connection>>,
     entity: Entity,
-    last_processed_id: Arc<AtomicU64>,
+    max_oplog_id: Arc<AtomicU64>,
 }
 
 impl LocalCache {
@@ -34,7 +34,7 @@ impl LocalCache {
         Self {
             db,
             entity,
-            last_processed_id: Arc::new(AtomicU64::new(0)),
+            max_oplog_id: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -43,17 +43,17 @@ impl LocalCache {
         run_migrations(&conn, &self.entity.shape)?;
         drop(conn);
 
-        let last_processed_id = self.load_last_processed_id()?;
-        self.last_processed_id.store(last_processed_id, Ordering::Relaxed);
+        let max_oplog_id = self.load_max_oplog_id()?;
+        self.max_oplog_id.store(max_oplog_id, Ordering::Relaxed);
         Ok(())
     }
 
-    fn load_last_processed_id(&self) -> anyhow::Result<u64> {
+    fn load_max_oplog_id(&self) -> anyhow::Result<u64> {
         let conn = self.db.lock().unwrap();
         let query = format!("SELECT value FROM {METADATA_TABLE} WHERE key = ?");
 
         let mut stmt = conn.prepare(&query)?;
-        let result: Result<u64, rusqlite::Error> = stmt.query_row(params![LAST_PROCESSED_ID_KEY], |row| row.get(0));
+        let result: Result<u64, rusqlite::Error> = stmt.query_row(params![MAX_OPLOG_ID_KEY], |row| row.get(0));
 
         match result {
             Ok(value) => Ok(value),
@@ -88,7 +88,7 @@ impl LocalCache {
             max_processed_id = max_processed_id.max(oplog.id as u64);
         }
 
-        self.set_last_processed_id(&tx, max_processed_id)?;
+        self.set_max_oplog_id(&tx, max_processed_id)?;
         tx.commit().context("Failed to commit transaction")?;
 
         debug!(
@@ -96,7 +96,7 @@ impl LocalCache {
             processed_count, self.entity.name
         );
 
-        self.last_processed_id.store(max_processed_id, Ordering::Relaxed);
+        self.max_oplog_id.store(max_processed_id, Ordering::Relaxed);
 
         Ok(())
     }
@@ -125,12 +125,12 @@ impl LocalCache {
         Ok(())
     }
 
-    fn set_last_processed_id(&self, tx: &Transaction, last_processed_id: u64) -> anyhow::Result<()> {
+    fn set_max_oplog_id(&self, tx: &Transaction, max_oplog_id: u64) -> anyhow::Result<()> {
         let query = format!(
             "INSERT INTO {METADATA_TABLE} (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         );
 
-        tx.execute(&query, params![LAST_PROCESSED_ID_KEY, last_processed_id])
+        tx.execute(&query, params![MAX_OPLOG_ID_KEY, max_oplog_id])
             .context("Failed to set last processed id")?;
         Ok(())
     }
@@ -141,10 +141,10 @@ impl LocalCache {
         let backup = Backup::new(&conn, &mut dst)?;
         backup.run_to_completion(1000, Duration::from_micros(1), None)?;
 
-        Ok(self.last_processed_id.load(Ordering::Relaxed))
+        Ok(self.max_oplog_id.load(Ordering::Relaxed))
     }
 
-    pub fn last_processed_id(&self) -> u64 {
-        self.last_processed_id.load(Ordering::Relaxed)
+    pub fn max_oplog_id(&self) -> u64 {
+        self.max_oplog_id.load(Ordering::Relaxed)
     }
 }

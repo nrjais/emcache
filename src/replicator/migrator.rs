@@ -14,7 +14,6 @@ fn sqlite_type(typ: DataType) -> String {
         DataType::Number => "REAL".to_string(),
         DataType::Integer => "INTEGER".to_string(),
         DataType::String => "TEXT".to_string(),
-        DataType::Bytes => "BLOB".to_string(),
     }
 }
 

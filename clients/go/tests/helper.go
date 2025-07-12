@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/mongo"
 
-	// Use the local emcache package instead of the old gRPC client
 	"emcache"
 )
 
@@ -59,7 +58,7 @@ func createClient(t *testing.T, ctx context.Context, collections ...string) (*em
 	clientCtx, clientCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer clientCancel()
 
-	client, err := emcache.NewClient(clientCtx, emcache.Config{
+	client := emcache.NewClient(clientCtx, emcache.Config{
 		ServerURL:    emcacheServerURL,
 		Directory:    t.TempDir(),
 		Collections:  collections,
@@ -67,13 +66,13 @@ func createClient(t *testing.T, ctx context.Context, collections ...string) (*em
 		BatchSize:    100,
 	})
 
-	if err != nil {
-		return nil, err
-	}
-
-	err = client.StartSync()
-	if err != nil {
-		return nil, err
+	if len(collections) > 0 {
+		err := client.Initialize(clientCtx)
+		require.NoError(t, err, "Failed to initialize emcache client")
+		err = client.SyncOnce(ctx)
+		require.NoError(t, err, "Failed to sync to latest")
+		err = client.StartSync()
+		require.NoError(t, err, "Failed to start sync")
 	}
 
 	t.Cleanup(func() {
@@ -193,40 +192,8 @@ func setupCollectionWithShapeAndDocs[T any](t *testing.T, ctx context.Context, c
 		time.Sleep(5 * time.Second)
 	}
 
-	var emcacheClient *emcache.Client
-	waitForSync(t, func() error {
-		emcacheClient, err = createClient(t, ctx, collectionName)
-		return err
-	})
+	emcacheClient, err := createClient(t, ctx, collectionName)
 	require.NoError(t, err, "Failed to create emcache client")
 
 	return emcacheClient
-}
-
-func waitForSync(t *testing.T, operation func() error) {
-	t.Helper()
-
-	maxWaitTime := 20 * time.Second
-	deadline := time.Now().Add(maxWaitTime)
-	backoff := 200 * time.Millisecond
-	var lastErr error
-
-	for time.Now().Before(deadline) {
-		time.Sleep(backoff)
-
-		err := operation()
-		if err == nil {
-			return // Success
-		}
-
-		lastErr = err
-		newBackoff := time.Duration(float64(backoff) * 1.5)
-		if newBackoff > 3*time.Second {
-			backoff = 3 * time.Second
-		} else {
-			backoff = newBackoff
-		}
-	}
-
-	require.NoError(t, lastErr, "Failed to perform operation within timeout")
 }

@@ -21,7 +21,7 @@ use crate::types::Entity;
 
 struct Snapshot {
     guard: SnapshotRef,
-    last_processed_id: u64,
+    max_oplog_id: u64,
     cache: LocalCache,
 }
 
@@ -72,14 +72,14 @@ impl SnapshotManager {
 
     async fn create_snapshot(&self, entity: &Entity) -> anyhow::Result<File> {
         let cache = self.sqlite_manager.get_or_create_cache(entity).await?;
-        let (snapshot, last_processed_id) = self.snapshot_for(entity, &cache).await?;
+        let (snapshot, max_oplog_id) = self.snapshot_for(entity, &cache).await?;
 
         let file = snapshot.open()?;
         self.snapshots.insert(
             entity.name.clone(),
             Snapshot {
                 guard: snapshot,
-                last_processed_id,
+                max_oplog_id,
                 cache,
             },
         );
@@ -89,8 +89,8 @@ impl SnapshotManager {
 
     async fn snapshot_for(&self, entity: &Entity, cache: &LocalCache) -> anyhow::Result<(SnapshotRef, u64)> {
         let snapshot = SnapshotRef::new(&entity.name, &self.base_dir).await?;
-        let last_processed_id = cache.snapshot_to(snapshot.path())?;
-        Ok((snapshot, last_processed_id))
+        let max_oplog_id = cache.snapshot_to(snapshot.path())?;
+        Ok((snapshot, max_oplog_id))
     }
 
     async fn recreate_stale_snapshots(&self) {
@@ -105,17 +105,17 @@ impl SnapshotManager {
                 continue;
             };
 
-            let latest_offset = snapshot.cache.last_processed_id();
+            let latest_offset = snapshot.cache.max_oplog_id();
 
-            let lag = latest_offset.saturating_sub(snapshot.last_processed_id);
+            let lag = latest_offset.saturating_sub(snapshot.max_oplog_id);
 
             if lag > self.min_lag {
                 let result = self.snapshot_for(&entity, &snapshot.cache).await;
-                let Ok((snapshot_ref, last_processed_id)) = result else {
+                let Ok((snapshot_ref, max_oplog_id)) = result else {
                     error!("Failed to recreate stale snapshot for entity: {}", entity.name);
                     continue;
                 };
-                snapshot.last_processed_id = last_processed_id;
+                snapshot.max_oplog_id = max_oplog_id;
                 snapshot.guard = snapshot_ref;
             }
         }

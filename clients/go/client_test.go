@@ -42,11 +42,11 @@ type MockEntity struct {
 	closeFunc                    func() error
 }
 
-func (m *MockEntity) GetLastAppliedOplogIndex(ctx context.Context) (int64, error) {
+func (m *MockEntity) GetMaxOplogId(ctx context.Context) (int64, error) {
 	return m.getLastAppliedOplogIndexFunc(ctx)
 }
 
-func (m *MockEntity) ApplyOplogEntries(ctx context.Context, entries []Oplog) error {
+func (m *MockEntity) ApplyOplogs(ctx context.Context, entries []Oplog) error {
 	return m.applyOplogEntriesFunc(ctx, entries)
 }
 
@@ -158,9 +158,9 @@ func TestNewClientWithDependencies_InvalidUpdateInterval(t *testing.T) {
 		BatchSize:    0,
 	}
 
-	_, err := NewClient(context.Background(), config)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "server URL is required")
+	client := NewClient(context.Background(), config)
+	assert.NotNil(t, client)
+	assert.Error(t, client.validateConfig())
 }
 
 func TestInitializeLastOplogIdx_MultipleEntities(t *testing.T) {

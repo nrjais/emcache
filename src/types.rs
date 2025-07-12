@@ -52,7 +52,6 @@ pub enum DataType {
     Number,
     Integer,
     String,
-    Bytes,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
