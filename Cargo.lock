@@ -717,6 +717,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "serde_with",
  "sqlx",
  "thiserror 2.0.12",
  "tokio",

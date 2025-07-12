@@ -3,3 +3,4 @@
 caches
 Yaak
 *.session.sql
+*.test

@@ -19,7 +19,7 @@ impl IntoResponse for ApiError {
         };
 
         let payload = json!({
-            "rejected": message,
+            "reason": message,
         });
 
         (status, Json(payload)).into_response()

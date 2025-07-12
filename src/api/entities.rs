@@ -12,7 +12,8 @@ use garde::Validate;
 use jsonpath_rust::parser::parse_json_path;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
-use tracing::error;
+use serde_with::{DefaultOnNull, serde_as};
+use tracing::{error, info};
 
 use super::AppState;
 use crate::{
@@ -41,13 +42,9 @@ async fn create_entity(
         let errors = e
             .into_inner()
             .iter()
-            .map(|(path, error)| {
-                json!({
-                    "path": path.to_string(),
-                    "error": error.to_string()
-                })
-            })
+            .map(|(path, error)| format!("{}: {}", path.to_string(), error.to_string()))
             .collect::<Vec<_>>();
+        info!("Validation errors for entity creation: {:?}", errors);
         return Err((StatusCode::BAD_REQUEST, Json(json!({ "errors": errors }))));
     }
 
@@ -102,13 +99,13 @@ async fn delete_entity(
 #[garde(context(Configs))]
 pub struct CreateEntityRequest {
     #[garde(length(min = 1))]
-    #[garde(alphanumeric)]
+    #[garde(custom(identifier))]
     pub name: String,
     #[garde(length(min = 1))]
     #[garde(custom(valid_client))]
     pub client: String,
     #[garde(length(min = 1))]
-    #[garde(alphanumeric)]
+    #[garde(custom(identifier))]
     pub source: String,
     #[garde(dive)]
     pub shape: ShapeRequest,
@@ -128,7 +125,7 @@ pub struct IdColumnRequest {
 #[garde(context(Configs))]
 pub struct ColumnRequest {
     #[garde(length(min = 1))]
-    #[garde(alphanumeric)]
+    #[garde(custom(identifier))]
     pub name: String,
     #[serde(rename = "type")]
     #[garde(skip)]
@@ -141,13 +138,14 @@ pub struct ColumnRequest {
 #[garde(context(Configs))]
 pub struct IndexRequest {
     #[garde(length(min = 1))]
-    #[garde(alphanumeric)]
+    #[garde(custom(identifier))]
     pub name: String,
     #[garde(length(min = 1))]
     #[garde(custom(unique_list))]
     pub columns: Vec<String>,
 }
 
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 #[garde(context(Configs))]
 pub struct ShapeRequest {
@@ -159,6 +157,7 @@ pub struct ShapeRequest {
     pub columns: Vec<ColumnRequest>,
     #[garde(dive)]
     #[garde(custom(valid_indexes(&self.columns)))]
+    #[serde_as(as = "DefaultOnNull")]
     pub indexes: Vec<IndexRequest>,
 }
 
@@ -251,6 +250,15 @@ fn valid_columns(columns: &Vec<ColumnRequest>, _conf: &Configs) -> garde::Result
     }
     if seen.contains("id") {
         return Err(garde::Error::new("custom id column is not allowed"));
+    }
+    Ok(())
+}
+
+fn identifier(path: &str, _conf: &Configs) -> garde::Result {
+    for c in path.chars() {
+        if !c.is_ascii_alphanumeric() && c != '_' {
+            return Err(garde::Error::new(format!("non-alphanumeric character in identifier: {}", c)));
+        }
     }
     Ok(())
 }
