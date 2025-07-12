@@ -13,14 +13,14 @@ pub const SNAPSHOT_DIR: &str = "snapshots";
 
 #[derive(Debug)]
 struct DeleteOnDrop {
-    file_path: PathBuf,
+    path: PathBuf,
     _ref_count: Arc<()>,
 }
 
 impl DeleteOnDrop {
-    fn new(file_path: PathBuf) -> Self {
+    fn new(path: PathBuf) -> Self {
         Self {
-            file_path,
+            path,
             _ref_count: Arc::new(()),
         }
     }
@@ -29,8 +29,8 @@ impl DeleteOnDrop {
 impl Drop for DeleteOnDrop {
     fn drop(&mut self) {
         if Arc::strong_count(&self._ref_count) == 1 {
-            if let Err(e) = std::fs::remove_file(&self.file_path) {
-                error!("Failed to remove snapshot file {:?}: {}", self.file_path, e);
+            if let Err(e) = std::fs::remove_dir_all(&self.path) {
+                error!("Failed to remove snapshot file {:?}: {}", self.path, e);
             }
         }
     }
@@ -38,7 +38,7 @@ impl Drop for DeleteOnDrop {
 
 pub struct SnapshotRef {
     file_path: PathBuf,
-    guard: DeleteOnDrop,
+    _guard: DeleteOnDrop,
 }
 
 impl SnapshotRef {
@@ -46,17 +46,20 @@ impl SnapshotRef {
         let now = Utc::now();
         let time_str = now.format("%Y%m%d-%H%M%S").to_string();
 
-        let entity_dir = format!("{base_dir}/{SNAPSHOT_DIR}/{entity_name}");
+        let entity_dir = PathBuf::from(format!("{base_dir}/{SNAPSHOT_DIR}/{entity_name}"));
         create_dir_all(&entity_dir).await?;
 
-        let file_path = PathBuf::from(format!("{entity_dir}/{time_str}-snap.db"));
-        let guard = DeleteOnDrop::new(file_path.clone());
+        let file_path = entity_dir.join(format!("{time_str}-snap.db"));
+        let guard = DeleteOnDrop::new(entity_dir);
 
-        Ok(Self { file_path, guard })
+        Ok(Self {
+            file_path,
+            _guard: guard,
+        })
     }
 
     pub fn path(&self) -> &Path {
-        &self.guard.file_path
+        &self.file_path
     }
 
     pub fn open(&self) -> anyhow::Result<File> {
