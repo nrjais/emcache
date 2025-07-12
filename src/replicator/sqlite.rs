@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -5,7 +6,7 @@ use anyhow::Context;
 use dashmap::DashMap;
 use rusqlite::Connection;
 use tokio::fs;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::{replicator::cache::LocalCache, types::Entity};
 
@@ -94,11 +95,49 @@ impl SqliteManager {
         }
 
         let entity_dir = Path::new(&self.base_dir).join(entity_name);
-        if entity_dir.exists() {
-            fs::remove_dir_all(&entity_dir)
-                .await
-                .context("Failed to remove directory")?;
-            info!("Deleted cache database directory: {}", entity_dir.display());
+        fs::remove_dir_all(&entity_dir)
+            .await
+            .context("Failed to remove directory")?;
+        info!("Deleted cache database directory: {}", entity_dir.display());
+
+        Ok(())
+    }
+
+    pub async fn list_cached_entities(&self) -> anyhow::Result<Vec<String>> {
+        let mut cached_entities = Vec::new();
+
+        let mut entries = fs::read_dir(&self.base_dir)
+            .await
+            .context("Failed to read cache directory")?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(entity_name) = path.file_name().and_then(|n| n.to_str()) {
+                    cached_entities.push(entity_name.to_string());
+                }
+            }
+        }
+
+        Ok(cached_entities)
+    }
+
+    pub async fn cleanup_orphaned_databases(&self, entities: &HashSet<String>) -> anyhow::Result<()> {
+        let cached_entities = self.list_cached_entities().await?;
+
+        for name in cached_entities {
+            if entities.contains(&name) {
+                continue;
+            }
+
+            match self.delete_database(&name).await {
+                Ok(()) => {
+                    info!("Cleaned up orphaned database for entity: {}", name);
+                }
+                Err(e) => {
+                    warn!("Failed to cleanup orphaned database for entity {}: {}", name, e);
+                }
+            }
         }
 
         Ok(())

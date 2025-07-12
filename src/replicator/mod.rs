@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tokio_util::sync::CancellationToken;
@@ -12,10 +13,10 @@ use crate::{
 };
 
 pub mod cache;
+mod mapper;
 pub mod metadata;
 mod migrator;
 pub mod sqlite;
-mod mapper;
 
 pub struct Replicator {
     sqlite_manager: Arc<SqliteManager>,
@@ -47,6 +48,7 @@ impl Replicator {
     async fn replication_loop(&self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
         info!("Starting cache replication loop");
 
+        let mut entities_update = self.entity_manager.broadcast();
         let mut interval = tokio::time::interval(self.interval);
         let mut last_processed_id = self.meta.get_last_processed_id()?;
 
@@ -62,11 +64,32 @@ impl Replicator {
                         interval.reset_immediately();
                     }
                 }
+                m = entities_update.recv() => {
+                    if let Err(_) = m {
+                        continue;
+                    }
+                    if let Err(e) = self.cleanup_orphaned_databases().await {
+                        error!("Failed to cleanup orphaned databases: {}", e);
+                    }
+                }
             }
         }
 
         self.sqlite_manager.shutdown().await?;
         info!("Cache replication loop stopped");
+        Ok(())
+    }
+
+    async fn cleanup_orphaned_databases(&self) -> anyhow::Result<()> {
+        info!("Cleaning up orphaned databases");
+
+        let existing_entities = self.entity_manager.get_all_entities();
+        let existing_entity_names: HashSet<String> = existing_entities.into_iter().map(|e| e.name).collect();
+
+        self.sqlite_manager
+            .cleanup_orphaned_databases(&existing_entity_names)
+            .await?;
+
         Ok(())
     }
 
@@ -124,7 +147,7 @@ impl Replicator {
             let cache = self.sqlite_manager.get_or_create_cache(&entity).await?;
             cache.apply_oplogs(oplogs).await?;
         } else {
-            error!("Entity not found: {}", entity_name);
+            error!("Entity not found: {}, skipping oplogs", entity_name);
         }
         Ok(())
     }

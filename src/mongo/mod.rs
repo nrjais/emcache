@@ -18,12 +18,12 @@ use mongodb::{
     options::FullDocumentType,
 };
 use tokio::{
-    sync::{Mutex, mpsc},
+    sync::{Mutex, broadcast::error::RecvError, mpsc},
     task::JoinHandle,
     time::timeout,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     config::Configs,
@@ -84,7 +84,15 @@ impl MongoClient {
                     info!("Entity monitor received shutdown signal");
                     break;
                 }
-                _ = broadcast_rx.recv() => {
+                m = broadcast_rx.recv() => {
+                    if let Err(RecvError::Lagged(_)) = m {
+                        continue;
+                    }
+                    if let Err(RecvError::Closed) = m {
+                        info!("Entity monitor received closed signal, stopping");
+                        break;
+                    }
+
                     if let Err(e) = self.sync_streams().await {
                         error!("Failed to sync streams: {}", e);
                     }
@@ -99,8 +107,8 @@ impl MongoClient {
     }
 
     async fn sync_streams(&self) -> anyhow::Result<()> {
-        let entities = self.entity_manager.refresh_entities().await?;
-        debug!("Refreshed {} entities", entities.len());
+        info!("Syncing live mongo change streams with entities");
+        let entities = self.entity_manager.get_all_entities();
 
         let mut active_streams = self.active_streams.lock().await;
         let current_entity_names: HashSet<String> = entities.iter().map(|e| e.name.clone()).collect();
