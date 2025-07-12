@@ -5,12 +5,13 @@ use axum::{
     response::Json,
     routing::get,
 };
+use axum_extra::extract::WithRejection;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use tracing::error;
 
 use super::AppState;
-use crate::types::Oplog;
+use crate::{api::with_rejection::ApiError, types::Oplog};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -20,7 +21,7 @@ pub fn router() -> Router<AppState> {
 
 async fn get_oplogs(
     State(state): State<AppState>,
-    Query(params): Query<OplogRequest>,
+    WithRejection(Query(params), _): WithRejection<Query<OplogRequest>, ApiError>,
 ) -> Result<Json<Vec<Oplog>>, (StatusCode, Json<JsonValue>)> {
     let from = params.from.clamp(0, i64::MAX);
     let limit = params.limit.clamp(1, 1000);

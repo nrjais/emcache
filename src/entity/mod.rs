@@ -49,13 +49,20 @@ impl EntityManager {
 
     pub async fn refresh_entities(&self) -> anyhow::Result<Vec<Entity>> {
         let entities = self.db.get_all_entities().await?;
+
+        let mut updated = entities.len() != self.cache.len();
+
         let names_set = entities.iter().map(|e| e.name.clone()).collect::<HashSet<_>>();
         self.cache.retain(|name, _| names_set.contains(name));
 
         for entity in &entities {
+            updated = true;
             self.cache.insert(entity.name.clone(), entity.clone());
         }
-        let _ = self.broadcast_tx.send(());
+
+        if updated {
+            let _ = self.broadcast_tx.send(());
+        }
 
         Ok(entities)
     }
