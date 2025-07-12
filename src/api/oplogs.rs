@@ -6,6 +6,7 @@ use axum::{
     routing::get,
 };
 use axum_extra::extract::WithRejection;
+use garde::Validate;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use tracing::error;
@@ -23,8 +24,17 @@ async fn get_oplogs(
     State(state): State<AppState>,
     WithRejection(Query(params), _): WithRejection<Query<OplogRequest>, ApiError>,
 ) -> Result<Json<Vec<Oplog>>, (StatusCode, Json<JsonValue>)> {
+    if let Err(e) = params.validate() {
+        let errors = e
+            .into_inner()
+            .iter()
+            .map(|(path, error)| format!("{}: {}", path.to_string(), error.to_string()))
+            .collect::<Vec<_>>();
+        return Err((StatusCode::BAD_REQUEST, Json(json!({ "errors": errors }))));
+    }
+
     let from = params.from.clamp(0, i64::MAX);
-    let limit = params.limit.clamp(1, 1000);
+    let limit = params.limit.clamp(1, 10000);
 
     match state.oplog_db.get_oplogs_by_entity(&params.entities, from, limit).await {
         Ok(oplogs) => Ok(Json(oplogs)),
@@ -53,11 +63,15 @@ async fn get_oplog_status(State(state): State<AppState>) -> Result<Json<OplogSta
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Validate)]
 pub struct OplogRequest {
-    pub entities: Vec<String>,
+    #[garde(range(min = 0))]
     pub from: i64,
+    #[garde(range(min = 1, max = 10000))]
     pub limit: i64,
+    #[serde(default)]
+    #[garde(length(min = 1))]
+    pub entities: Vec<String>,
 }
 
 #[derive(Serialize, Debug)]
