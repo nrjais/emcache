@@ -29,8 +29,8 @@ pub fn router() -> Router<AppState> {
         .route("/entities/{name}", delete(delete_entity))
 }
 
-async fn get_entities(State(state): State<AppState>) -> Result<Json<Vec<Entity>>, (StatusCode, Json<JsonValue>)> {
-    Ok(Json(state.entity_manager.get_all_entities()))
+async fn get_entities(State(state): State<AppState>) -> Json<Vec<Entity>> {
+    Json(state.entity_manager.get_all_entities())
 }
 
 async fn create_entity(
