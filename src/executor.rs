@@ -1,6 +1,6 @@
 use anyhow::Result;
+use std::future::Future;
 use std::sync::Arc;
-use std::{collections::HashMap, future::Future};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -13,18 +13,19 @@ pub trait Task: Sync + Send {
 
 #[derive(Debug)]
 struct TaskHandle {
-    task_handle: tokio::task::JoinHandle<()>,
+    name: String,
+    handle: tokio::task::JoinHandle<()>,
 }
 
 pub struct TaskServer {
-    tasks: Arc<RwLock<HashMap<String, TaskHandle>>>,
+    tasks: Arc<RwLock<Vec<TaskHandle>>>,
     shutdown_token: CancellationToken,
 }
 
 impl TaskServer {
     pub fn new() -> Self {
         Self {
-            tasks: Arc::new(RwLock::new(HashMap::new())),
+            tasks: Arc::new(RwLock::new(Vec::new())),
             shutdown_token: CancellationToken::new(),
         }
     }
@@ -42,10 +43,13 @@ impl TaskServer {
 
         let task_handle = tokio::spawn(Self::run_task_loop(task, cancellation_token));
 
-        let task_handle = TaskHandle { task_handle };
+        let task_handle = TaskHandle {
+            name: task_name.clone(),
+            handle: task_handle,
+        };
 
         let mut tasks = tasks_map.write().await;
-        tasks.insert(task_name.clone(), task_handle);
+        tasks.push(task_handle);
 
         info!("Task registered successfully: {}", task_name);
         Ok(())
@@ -67,12 +71,12 @@ impl TaskServer {
         self.shutdown_token.cancel();
 
         let mut tasks = self.tasks.write().await;
-        let task_handles: Vec<_> = tasks.drain().collect();
+        let task_handles = tasks.drain(..).collect::<Vec<_>>();
 
-        for (name, task_handle) in task_handles {
-            info!("Waiting for task {} to finish", name);
-            if let Err(e) = task_handle.task_handle.await {
-                error!("Error waiting for task {} to finish: {}", name, e);
+        for task_handle in task_handles.into_iter().rev() {
+            info!("Waiting for task {} to finish", task_handle.name);
+            if let Err(e) = task_handle.handle.await {
+                error!("Error waiting for task {} to finish: {}", task_handle.name, e);
             }
         }
 

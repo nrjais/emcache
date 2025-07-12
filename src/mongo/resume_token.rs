@@ -1,6 +1,10 @@
 use mongodb::change_stream::event::ResumeToken;
-use tokio::sync::{Mutex, broadcast::Receiver};
+use tokio::sync::{
+    Mutex,
+    broadcast::{Receiver, error::RecvError},
+};
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 
 use crate::{executor::Task, storage::PostgresClient, types::OplogEvent};
 
@@ -53,22 +57,28 @@ impl ResumeTokenManager {
 
     pub async fn start(&self, cancellation_token: CancellationToken) -> Result<(), anyhow::Error> {
         let mut receiver = self.receiver.lock().await;
-        tokio::select! {
-            _ = cancellation_token.cancelled() => {
-                return Ok(());
-            }
-            oplog = receiver.recv() => {
-                match oplog {
-                    Ok(oplog) => {
-                        self.save(&oplog.oplog.entity, &oplog.data).await?;
-                    }
-                    Err(e) => {
-                        return Err(e.into());
+        loop {
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    info!("Resume token receiver cancelled, shutting down");
+                    return Ok(());
+                }
+                oplog = receiver.recv() => {
+                    match oplog {
+                        Ok(oplog) => {
+                            self.save(&oplog.oplog.entity, &oplog.data).await?;
+                        }
+                        Err(e) => {
+                            if let RecvError::Closed = e {
+                                info!("Resume token receiver closed, shutting down");
+                                return Ok(());
+                            }
+                            return Err(e.into());
+                        }
                     }
                 }
             }
         }
-        Ok(())
     }
 }
 
@@ -78,8 +88,6 @@ impl Task for ResumeTokenManager {
     }
 
     async fn execute(&self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
-        loop {
-            self.start(cancellation_token.clone()).await?;
-        }
+        self.start(cancellation_token.clone()).await
     }
 }
