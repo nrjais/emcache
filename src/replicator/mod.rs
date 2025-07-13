@@ -65,7 +65,7 @@ impl Replicator {
                     }
                 }
                 m = entities_update.recv() => {
-                    if let Err(_) = m {
+                    if m.is_err() {
                         continue;
                     }
                     if let Err(e) = self.cleanup_orphaned_databases().await {

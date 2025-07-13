@@ -23,7 +23,7 @@ async fn get_oplogs(
         let errors = e
             .into_inner()
             .iter()
-            .map(|(path, error)| format!("{}: {}", path.to_string(), error.to_string()))
+            .map(|(path, error)| format!("{path}: {error}"))
             .collect::<Vec<_>>();
         return Err((StatusCode::BAD_REQUEST, Json(json!({ "errors": errors }))));
     }

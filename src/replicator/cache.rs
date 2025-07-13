@@ -102,7 +102,7 @@ impl LocalCache {
     }
 
     fn apply_upsert(tx: &Transaction, entity: &Entity, oplog: &Oplog) -> anyhow::Result<()> {
-        let (query, values) = generate_insert_query(entity, &oplog)?;
+        let (query, values) = generate_insert_query(entity, oplog)?;
         let params = values.iter().map(|v| v as &dyn ToSql).collect::<Vec<_>>();
 
         tx.execute(&query, params.as_slice())

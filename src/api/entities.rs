@@ -42,7 +42,7 @@ async fn create_entity(
         let errors = e
             .into_inner()
             .iter()
-            .map(|(path, error)| format!("{}: {}", path.to_string(), error.to_string()))
+            .map(|(path, error)| format!("{path}: {error}"))
             .collect::<Vec<_>>();
         info!("Validation errors for entity creation: {:?}", errors);
         return Err((StatusCode::BAD_REQUEST, Json(json!({ "errors": errors }))));
@@ -202,14 +202,14 @@ impl From<IndexRequest> for Index {
 fn validate_path(path: &str, _conf: &Configs) -> garde::Result {
     parse_json_path(path)
         .map(|_| ())
-        .map_err(|e| Error::new(format!("Invalid JSONPath: {}, {}", path, e)))
+        .map_err(|e| Error::new(format!("Invalid JSONPath: {path}, {e}")))
 }
 
 fn unique_list(list: &Vec<String>, _conf: &Configs) -> garde::Result {
     let mut seen = HashSet::new();
     for item in list {
         if !seen.insert(item) {
-            return Err(Error::new(format!("Duplicate item: {}", item)));
+            return Err(Error::new(format!("Duplicate item: {item}")));
         }
     }
     Ok(())
@@ -219,7 +219,7 @@ fn valid_client(client: &str, conf: &Configs) -> garde::Result {
     if conf.sources.contains_key(client) {
         Ok(())
     } else {
-        Err(Error::new(format!("Invalid client: {}", client)))
+        Err(Error::new(format!("Invalid client: {client}")))
     }
 }
 
@@ -232,7 +232,7 @@ fn valid_indexes(columns: &Vec<ColumnRequest>) -> impl FnOnce(&Vec<IndexRequest>
         for index in indexes {
             for column in &index.columns {
                 if !column_names.contains(column) {
-                    return Err(Error::new(format!("Invalid index column: {}", column)));
+                    return Err(Error::new(format!("Invalid index column: {column}")));
                 }
             }
         }
@@ -245,7 +245,7 @@ fn valid_columns(columns: &Vec<ColumnRequest>, _conf: &Configs) -> garde::Result
     for column in columns {
         let name = &column.name;
         if !seen.insert(name.clone()) {
-            return Err(Error::new(format!("Duplicate column with name: {}", name)));
+            return Err(Error::new(format!("Duplicate column with name: {name}")));
         }
     }
     if seen.contains("id") {
@@ -257,7 +257,7 @@ fn valid_columns(columns: &Vec<ColumnRequest>, _conf: &Configs) -> garde::Result
 fn identifier(path: &str, _conf: &Configs) -> garde::Result {
     for c in path.chars() {
         if !c.is_ascii_alphanumeric() && c != '_' {
-            return Err(Error::new(format!("non-alphanumeric character in identifier: {}", c)));
+            return Err(Error::new(format!("non-alphanumeric character in identifier: {c}")));
         }
     }
     Ok(())

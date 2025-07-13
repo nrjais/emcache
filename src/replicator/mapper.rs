@@ -51,7 +51,7 @@ impl TryFrom<&JsonValue> for SqlValue {
     }
 }
 
-pub fn generate_insert_query<'a>(entity: &Entity, oplog: &'a Oplog) -> anyhow::Result<(String, Vec<SqlValue>)> {
+pub fn generate_insert_query(entity: &Entity, oplog: &Oplog) -> anyhow::Result<(String, Vec<SqlValue>)> {
     let mut values = Vec::new();
     let mut placeholders = String::new();
     let mut columns = String::new();
@@ -60,7 +60,7 @@ pub fn generate_insert_query<'a>(entity: &Entity, oplog: &'a Oplog) -> anyhow::R
 
     values.push(id_value);
     columns.push_str("id");
-    placeholders.push_str("?");
+    placeholders.push('?');
 
     let data = oplog.data.as_array().unwrap();
 
@@ -75,10 +75,7 @@ pub fn generate_insert_query<'a>(entity: &Entity, oplog: &'a Oplog) -> anyhow::R
         columns.push_str(&column.name);
     }
 
-    let query = format!(
-        "INSERT OR REPLACE INTO {} ({}) VALUES ({})",
-        DATA_TABLE, columns, placeholders
-    );
+    let query = format!("INSERT OR REPLACE INTO {DATA_TABLE} ({columns}) VALUES ({placeholders})");
 
     Ok((query, values))
 }
