@@ -15,6 +15,7 @@ use mongodb::{
     Client, Collection, Database,
     bson::{self, Document},
     change_stream::event::ResumeToken,
+    error::{Error as MongoError, ErrorKind},
     options::FullDocumentType,
 };
 use tokio::{
@@ -233,28 +234,65 @@ impl MongoClient {
     }
 }
 
+fn resume_token_error(error: &anyhow::Error) -> bool {
+    if let Some(mongo_error) = error.downcast_ref::<MongoError>() {
+        match mongo_error.kind.as_ref() {
+            ErrorKind::MissingResumeToken => true,
+            ErrorKind::Command(command_error) => {
+                let message = command_error.message.to_lowercase();
+                message.contains("resume") ||
+                command_error.code == 280 || // ChangeStreamFatalError
+                command_error.code == 286 || // ChangeStreamHistoryLost
+                command_error.code == 222 || // CloseChangeStream
+                command_error.code == 234 // RetryChangeStream
+            }
+            _ => false,
+        }
+    } else {
+        let error_msg = error.to_string().to_lowercase();
+        error_msg.contains("resume token")
+            || error_msg.contains("resumetoken")
+            || error_msg.contains("change stream")
+            || error_msg.contains("oplog")
+            || error_msg.contains("cursor not found")
+    }
+}
+
 async fn create_change_stream(
     resume_token_manager: Arc<ResumeTokenManager>,
     database: &Database,
     entity: &Entity,
 ) -> anyhow::Result<Pin<Box<dyn Stream<Item = OplogEvent> + Send>>> {
-    let resume_token = resume_token_manager.fetch(&entity.name).await?;
+    let entity_name = entity.name.clone();
+    let resume_token = resume_token_manager.fetch(&entity_name).await?;
     let resume_token = resume_token.map(|token| token.token_data());
-    let has_resume_token = resume_token.is_some();
+    let Some(resume_token) = resume_token else {
+        info!("Starting stream for entity '{}' without resume token", entity_name);
+        return restart_stream(database, entity.clone()).await;
+    };
 
-    let change_stream = start_stream(database.collection(&entity.source), resume_token, entity.clone()).await?;
+    let change_stream = start_stream(database.collection(&entity.source), Some(resume_token), entity.clone()).await;
 
-    if has_resume_token {
-        info!("Starting change stream for entity '{}' with resume token", &entity.name);
-        Ok(change_stream.boxed())
-    } else {
-        info!(
-            "Starting change stream for entity '{}' without resume token",
-            &entity.name
-        );
-        let scan_stream = collection_scan(database, entity.clone()).await?;
-        Ok(scan_stream.chain(change_stream).boxed())
+    match change_stream {
+        Ok(change_stream) => {
+            info!("Starting stream for entity '{entity_name}' with resume token");
+            Ok(change_stream.boxed())
+        }
+        Err(e) if resume_token_error(&e) => {
+            error!("resume token error {e:?} for entity '{entity_name}', restarting stream");
+            restart_stream(database, entity.clone()).await
+        }
+        Err(e) => Err(e),
     }
+}
+
+async fn restart_stream(
+    database: &Database,
+    entity: Entity,
+) -> anyhow::Result<Pin<Box<dyn Stream<Item = OplogEvent> + Send>>> {
+    let scan_stream = collection_scan(database, entity.clone()).await?;
+    let change_stream = start_stream(database.collection(&entity.source), None, entity.clone()).await?;
+    Ok(scan_stream.chain(change_stream).boxed())
 }
 
 async fn collection_scan(
@@ -292,7 +330,14 @@ async fn start_stream(
 
     let stream = stream
         .map(move |change| shaper::map_oplog_from_change(change.unwrap(), &entity))
-        .filter_map(async move |oplog| oplog.ok().flatten());
+        .filter_map(async move |oplog| {
+            if let Ok(oplog) = oplog {
+                oplog
+            } else {
+                error!("Failed to map oplog for entity: {:?}", oplog);
+                None
+            }
+        });
 
     Ok(stream)
 }
