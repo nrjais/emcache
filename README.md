@@ -1,323 +1,329 @@
-## Design
-# Oplog
-* Type defining a generic oplog entry
-```
-type Oplog (
-  ID         int64 -- Incrementing number
-  Operation  enum Upsert/Delete
-  DocID      string
-  CreatedAt  timestamp
-  Entity     string
-  Data       json
-)
-```
-* Type definign entity
-```
-enum DataType (
-	JSONB
-	Any
-	Bool
-	Number
-	Integer
-	Text
-)
+# EMCache
 
-type Column (
-	Name string
-	Type DataType
-	Path string
-)
+A high-performance cache replication system that synchronizes data from MongoDB to local SQLite databases via PostgreSQL with real-time oplog-based replication.
 
-type Shape (
-  EntityName string
-  SourceName string
-	Columns []Column
-)
+## Overview
+
+EMCache is a distributed caching system designed to replicate MongoDB data to fast local SQLite databases. It provides real-time synchronization through MongoDB change streams and maintains consistency through an oplog-based architecture stored in PostgreSQL.
+
+## Architecture
+
 ```
-* Metadata table local sqlite
-```
-key string
-value json
+MongoDB → Change Streams → Oplog Manager → PostgreSQL → Cache Replicator → SQLite Caches
+                                                      ↓
+                                                  REST API
 ```
 
-# Job server
-* Manage list of jobs and run them based on provided interval/duration
-* Manage cancellation on server shutdown, by sending cancellation signal to jobs so that they can gracefully close
+### Key Components
 
-# Entity Manager
-* Should manage entities for which replication has to happen
-* Entities are stored in postgres
-* Create and job to refresh entities regularly from database
-* Also option to hard refresh
+- **MongoDB Change Stream Listener**: Captures real-time document changes from MongoDB collections
+- **Oplog Manager**: Processes change events and stores them as operation logs in PostgreSQL
+- **Cache Replicator**: Applies oplogs to local SQLite databases with background synchronization
+- **Entity Manager**: Manages entity definitions and lifecycle operations
+- **Snapshot Manager**: Creates and manages point-in-time snapshots of cache data
+- **REST API**: Provides comprehensive management endpoints for entities, oplogs, and system monitoring
 
-# Mongo Change Stream Listener - Split it in multiple modules
-* Listen to mongo change stream and publish to a channel with backpressure
-* Entry send over channel should be formatted as Oplog
-* If the oplog is not for known entity ignore it
-* the data in oplog is json of the actual doc with keys picked from entity shape
-* On an acknowledment channle recieve message about what changes are processed
-* After an interval or batch size update the acknowledged change resume token to potgres table
-* Resume token in metadata table with key `mongo_resume_token`
-* When resume token is not found on first time, get all entities and for each entity scan the source collection
-* When scanning source collection for each row create and upsert oplog entry
-* Before starting scan start the change listener and save resume token and then wait for initial scan to finish before resuming
+## Features
 
-# Oplog Manager
-* Listen on the oplog channel
-* For each message create an entry in oplog postgres table
-* Track the status of each entity for which oplog is being insert
-* If a new entity comes, push its oplog to staging and mark it as pending
-* Create and task to start full collection scane of that collection
-* Once the collection is scanned mark it as `scanned` and move the staging oplogs to main table
+- ✅ **Real-time Replication**: Instant synchronization using MongoDB change streams
+- ✅ **Fault Tolerance**: Robust error handling with retry mechanisms and graceful degradation
+- ✅ **High Performance**: Optimized SQLite caches with configurable indexing
+- ✅ **Flexible Schema**: JSON-based entity definitions with JSONPath field mapping
+- ✅ **Comprehensive API**: Full CRUD operations with detailed system monitoring
+- ✅ **Production Ready**: Complete with health checks, metrics, and deployment configuration
+- ✅ **Snapshot Support**: Point-in-time data snapshots for backup and recovery
 
-# Cache Replicator
-* Scan postgres oplog table regularly for new entries
-* Get scane start offset from local metadata db, start from 0 if none found
-* For every batch on oplogs from postgres, group then by entity name
-* For each group of entry get the corrrespoing cache db from cache db manager
-* Apply oplogs in the cache db
-* Save the oplog index to cache db in meta table
-* Save the postgres oplog index to local metadata db
+## Quick Start
 
-# Cache DB manager
-* For each entity manage and sqlite db connection
-* If the request entity db does not exists, initialize it first
-* Regularly clean up unused connection after some expiry time, to release stale entities
-* If and entity is deleted from db delete its local sqlite db directory
-* File name format is `dbs/{entity_name}/db.sqlite`
+### Prerequisites
 
-# EMCachers
+- **Rust** 1.75+ (using edition 2024)
+- **PostgreSQL** 13+
+- **MongoDB** 4.4+ (with change stream support)
 
-A high-performance cache replication system that synchronizes data from MongoDB to local SQLite databases via PostgreSQL with idempotent oplog-based replication.
+### Installation
 
-## Architecture Overview
-
-EMCachers implements a distributed cache replication system with the following components:
-
-- **MongoDB Change Stream Listener**: Captures real-time changes from MongoDB collections
-- **Oplog Manager**: Processes and stores change events in PostgreSQL with staging support
-- **Cache Replicator**: Applies oplogs to local SQLite cache databases
-- **Entity Manager**: Manages entity definitions and lifecycle
-- **REST API Server**: Provides management endpoints and health checks
-- **Job Scheduler**: Handles background tasks and maintenance
-
-## Key Features
-
-- ✅ **Idempotent Replication**: No duplicate handling needed, operations are naturally idempotent
-- ✅ **Resilient Architecture**: Circuit breakers, exponential backoff, and retry mechanisms
-- ✅ **Modular Design**: Clean separation of concerns with focused components
-- ✅ **Comprehensive Monitoring**: System metrics, health checks, and performance tracking
-- ✅ **Production Ready**: Docker support, configuration management, and graceful shutdown
-- ✅ **SQLite Connection Pooling**: Per-entity database management with automatic cleanup
-- ✅ **Entity Lifecycle Management**: Complete CRUD operations with status tracking
-- ✅ **Background Processing**: Automatic oplog processing and cache synchronization
-
-## Quick Start with Docker
-
-1. **Clone and Build**:
+1. **Clone the repository**:
    ```bash
-   git clone <repository>
+   git clone <repository-url>
    cd emcachers
-   cp config.toml.template config.toml
-   # Edit config.toml with your settings
    ```
 
-2. **Start with Docker Compose**:
+2. **Configure the application**:
    ```bash
-   docker-compose up -d
+   cp config.toml.example config.toml
+   # Edit config.toml with your database connections
    ```
 
-3. **Check Health**:
+3. **Build and run**:
    ```bash
-   curl http://localhost:8080/health
+   cargo build --release
+   ./target/release/emcache
    ```
+
+### Using Docker
+
+```bash
+docker-compose up -d
+```
 
 ## Configuration
 
-Copy `config.toml.template` to `config.toml` and customize:
+Edit `config.toml` to configure your setup:
 
 ```toml
 [server]
 host = "0.0.0.0"
 port = 8080
+shutdown_timeout = 10
 
-[database]
-postgres_url = "postgresql://user:pass@localhost:5432/emcachers"
-mongodb_url = "mongodb://localhost:27017/myapp"
+[logging]
+level = "info"
 
-[batch]
-oplog_batch_size = 1000
-postgres_batch_size = 500
+[database.postgres]
+uri = "postgresql://postgres:password@localhost:5432/emcache"
+max_connections = 20
+min_connections = 5
+connection_timeout = 10
 
-[retry]
-max_attempts = 3
-initial_delay_ms = 1000
-backoff_multiplier = 2.0
+[sources.main]
+uri = "mongodb://localhost:27017/myapp"
+database = "myapp"
+
+[cache]
+base_dir = "caches"
+replication_interval = 10
+entity_refresh_interval = 10
+
+[snapshot]
+check_interval = 10
+min_lag = 100
 ```
 
-## API Endpoints
+## API Reference
 
-### Health Checks
-- `GET /health` - Basic health check
-- `GET /health/detailed` - Comprehensive system status
+### Health Check
+
+```bash
+GET /health
+```
 
 ### Entity Management
-- `GET /api/entities` - List all entities
-- `POST /api/entities` - Create new entity
-- `GET /api/entities/{name}` - Get specific entity
-- `PUT /api/entities/{name}` - Update entity
-- `DELETE /api/entities/{name}` - Delete entity
 
-### Oplog Operations
-- `GET /api/oplogs/{entity}` - Get oplogs for entity
-- `POST /api/oplogs/batch` - Get oplogs for multiple entities
+#### Create Entity
 
-### Replication Status
-- `GET /api/replication/stats` - Replication statistics
-- `POST /api/replication/recreate/{entity}` - Recreate entity cache
+```bash
+POST /api/entities
+Content-Type: application/json
 
-### System Information
-- `GET /api/system/stats` - System metrics
-
-## Entity Configuration
-
-Entities define how MongoDB collections are mapped to cache databases:
-
-```json
 {
   "name": "users",
+  "client": "main",
+  "source": "users",
   "shape": {
-    "entity_name": "User",
-    "source_name": "users",
+    "id_column": {
+      "path": "$._id",
+      "type": "string"
+    },
     "columns": [
-      {"name": "id", "type": "Text", "path": "_id"},
-      {"name": "email", "type": "Text", "path": "email"},
-      {"name": "name", "type": "Text", "path": "name"}
+      {
+        "name": "email",
+        "type": "string",
+        "path": "$.email"
+      },
+      {
+        "name": "name",
+        "type": "string",
+        "path": "$.name"
+      },
+      {
+        "name": "age",
+        "type": "integer",
+        "path": "$.age"
+      }
+    ],
+    "indexes": [
+      {
+        "name": "email_idx",
+        "columns": ["email"]
+      }
     ]
   }
 }
 ```
 
-## Development
+#### List Entities
 
-### Prerequisites
-- Rust 1.75+
-- PostgreSQL 13+
-- MongoDB 4.4+ (for change streams)
-
-### Build from Source
 ```bash
-cargo build --release
+GET /api/entities
 ```
 
-### Run Tests
+#### Get Entity
+
+```bash
+GET /api/entities/{name}
+```
+
+#### Delete Entity
+
+```bash
+DELETE /api/entities/{name}
+```
+
+### Oplog Operations
+
+#### Get Oplogs for Entity
+
+```bash
+GET /api/oplogs/{entity}?limit=100&offset=0
+```
+
+#### Batch Oplog Query
+
+```bash
+POST /api/oplogs/batch
+Content-Type: application/json
+
+{
+  "entities": ["users", "products"],
+  "limit": 100,
+  "offset": 0
+}
+```
+
+### Snapshot Management
+
+#### Create Snapshot
+
+```bash
+POST /api/snapshots/{entity}
+```
+
+#### Get Snapshot
+
+```bash
+GET /api/snapshots/{entity}
+```
+
+## Entity Schema Definition
+
+Entities define how MongoDB documents are mapped to SQLite tables:
+
+### Data Types
+
+- `string`: Text data
+- `integer`: Integer numbers
+- `number`: Floating point numbers
+- `bool`: Boolean values
+- `jsonb`: JSON objects
+- `any`: Any JSON value
+
+### ID Column Types
+
+- `string`: String identifiers
+- `number`: Numeric identifiers
+
+### JSONPath Mapping
+
+Use JSONPath expressions to map MongoDB fields to SQLite columns:
+
+```json
+{
+  "name": "user_email",
+  "type": "string",
+  "path": "$.contact.email"
+}
+```
+
+## Development
+
+### Running Tests
+
 ```bash
 cargo test
 ```
 
-### Development Environment
-```bash
-# Start PostgreSQL
-docker run -d --name postgres \
-  -e POSTGRES_DB=emcachers \
-  -e POSTGRES_USER=emcachers \
-  -e POSTGRES_PASSWORD=password \
-  -p 5432:5432 postgres:15
+### Code Quality
 
-# Run application
-cargo run
+```bash
+cargo fmt
+cargo clippy
+```
+
+### Logging
+
+Set the `RUST_LOG` environment variable for detailed logging:
+
+```bash
+RUST_LOG=debug cargo run
+```
+
+### Database Setup
+
+1. **PostgreSQL**: Create database and run migrations
+2. **MongoDB**: Ensure replica set is configured for change streams
+
+## Deployment
+
+### Environment Variables
+
+Key configuration can be overridden with environment variables:
+
+- `EMCACHE_SERVER__HOST`: Server bind address
+- `EMCACHE_SERVER__PORT`: Server port
+- `EMCACHE_DATABASE__POSTGRES__URI`: PostgreSQL connection string
+- `EMCACHE_SOURCES__MAIN__URI`: MongoDB connection string
+
+### Production Checklist
+
+- [ ] Configure appropriate database connection pools
+- [ ] Set up monitoring and alerting
+- [ ] Configure log rotation
+- [ ] Set resource limits
+- [ ] Configure backup strategies
+- [ ] Set up high availability for databases
+
+## Monitoring
+
+### Health Endpoints
+
+- `GET /health`: Basic health check
+- `GET /api/entities`: Entity status
+- System metrics through logging
+
+```bash
+RUST_LOG=debug ./emcache
 ```
 
 ## Architecture Details
 
 ### Data Flow
-1. **MongoDB** → Change streams capture document changes
-2. **Oplog Manager** → Processes changes and stores in PostgreSQL
-3. **Cache Replicator** → Reads oplogs and applies to SQLite caches
-4. **SQLite Databases** → Per-entity cache databases for fast queries
+
+1. **MongoDB Change Streams**: Capture document changes in real-time
+2. **Oplog Storage**: Store changes in PostgreSQL with metadata
+3. **Cache Replication**: Apply oplogs to SQLite databases
+4. **Snapshot Management**: Create point-in-time snapshots
+5. **API Access**: Provide REST endpoints for management
 
 ### Fault Tolerance
-- **Circuit Breakers**: Prevent cascade failures
-- **Exponential Backoff**: Handles temporary failures gracefully
-- **Health Monitoring**: Automatic detection of component issues
-- **Graceful Degradation**: System continues operating during partial failures
 
-### Performance Features
-- **Batch Processing**: Efficient handling of high-volume changes
-- **Connection Pooling**: Optimized database connections
-- **Async Processing**: Non-blocking I/O throughout the system
-- **Indexing**: Optimized database schemas for query performance
-
-## Monitoring
-
-### System Metrics
-- Memory usage and thresholds
-- CPU utilization
-- Database connection health
-- Processing throughput
-
-### Alert Thresholds
-- CPU > 80%
-- Memory > 85%
-- Error rate > 5%
-- High pending oplog count
-
-### Performance Tracking
-- Operation duration metrics
-- Success/failure rates
-- Component response times
-
-## Deployment
-
-### Production Checklist
-- [ ] Configure connection strings for all databases
-- [ ] Set appropriate batch sizes for your workload
-- [ ] Configure retry parameters for your network conditions
-- [ ] Set up monitoring and alerting
-- [ ] Configure log levels and rotation
-- [ ] Set resource limits in Docker/Kubernetes
-
-### Scaling Considerations
-- **Horizontal Scaling**: Multiple cache replicator instances
-- **Database Sharding**: Partition oplogs by entity
-- **Load Balancing**: Distribute API requests
-- **Resource Allocation**: Memory for connection pools and batching
-
-## Troubleshooting
-
-### Common Issues
-1. **High Memory Usage**: Reduce batch sizes or increase connection cleanup frequency
-2. **Slow Replication**: Check PostgreSQL performance and oplog query efficiency
-3. **Connection Failures**: Verify database connectivity and adjust retry settings
-4. **Cache Corruption**: Use recreation endpoints to rebuild from oplogs
-
-### Debugging
-- Enable debug logging: `RUST_LOG=debug`
-- Check health endpoints for component status
-- Monitor system metrics for bottlenecks
-- Use PostgreSQL query analysis for performance issues
+- Automatic retry mechanisms with exponential backoff
+- Graceful degradation during database failures
+- Transaction-based consistency guarantees
+- Health monitoring and alerting
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Ensure `cargo fmt` and `cargo clippy` pass
-6. Submit a pull request
+3. Make your changes with tests
+4. Ensure code quality checks pass
+5. Submit a pull request
 
 ## License
 
-[Add your license information here]
+[License information]
 
 ## Status
 
-✅ **Production Ready**: Core functionality complete with comprehensive error handling, monitoring, and deployment support.
-
-Major components implemented:
-- Entity Management with full CRUD operations
-- Cache Replicator with background processing
-- REST API with comprehensive endpoints
-- Monitoring and alerting system
-- Docker deployment configuration
-- Database schema and migrations
+🚀 **Production Ready** - Core functionality complete with comprehensive testing and monitoring.
