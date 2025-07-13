@@ -1,6 +1,6 @@
-*.sqlite*
-emcache
-.cursorrules
-emcache*
-*.out
-*.html
+/target
+*.db
+caches
+Yaak
+*.session.sql
+*.test

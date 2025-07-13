@@ -1,0 +1,26 @@
+[server]
+host = "0.0.0.0"
+port = 8080
+shutdown_timeout = 10
+
+[logging]
+level = "info"
+
+[database.postgres]
+uri = "postgresql://postgres:password@localhost:5432/emcache"
+max_connections = 20
+min_connections = 5
+connection_timeout = 10
+
+[sources.main]
+uri = "mongodb://mongo.emcache.orb.local:27017/test?directConnection=true"
+database = "test"
+
+[cache]
+base_dir = "caches"
+replication_interval = 10
+entity_refresh_interval = 10
+
+[snapshot]
+check_interval = 10
+min_lag = 100
