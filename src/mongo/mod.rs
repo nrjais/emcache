@@ -241,6 +241,7 @@ fn resume_token_error(error: &anyhow::Error) -> bool {
             ErrorKind::Command(command_error) => {
                 let message = command_error.message.to_lowercase();
                 message.contains("resume") ||
+                command_error.code == 260 || // InvalidResumeToken
                 command_error.code == 280 || // ChangeStreamFatalError
                 command_error.code == 286 || // ChangeStreamHistoryLost
                 command_error.code == 222 || // CloseChangeStream
