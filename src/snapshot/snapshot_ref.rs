@@ -6,7 +6,6 @@ use std::{
 
 use anyhow::Context;
 use chrono::Utc;
-use tokio::fs::create_dir_all;
 use tracing::error;
 
 pub const SNAPSHOT_DIR: &str = "snapshots";
@@ -29,7 +28,7 @@ impl DeleteOnDrop {
 impl Drop for DeleteOnDrop {
     fn drop(&mut self) {
         if Arc::strong_count(&self._ref_count) == 1 {
-            if let Err(e) = std::fs::remove_dir_all(&self.path) {
+            if let Err(e) = std::fs::remove_file(&self.path) {
                 error!("Failed to remove snapshot file {:?}: {}", self.path, e);
             }
         }
@@ -45,12 +44,9 @@ impl SnapshotRef {
     pub async fn new(entity_name: &str, base_dir: &str) -> anyhow::Result<Self> {
         let now = Utc::now();
         let time_str = now.format("%Y%m%d-%H%M%S").to_string();
+        let file_path = PathBuf::from(format!("{base_dir}/{SNAPSHOT_DIR}/{entity_name}-{time_str}-snap.db"));
 
-        let entity_dir = PathBuf::from(format!("{base_dir}/{SNAPSHOT_DIR}/{entity_name}"));
-        create_dir_all(&entity_dir).await?;
-
-        let file_path = entity_dir.join(format!("{time_str}-snap.db"));
-        let guard = DeleteOnDrop::new(entity_dir);
+        let guard = DeleteOnDrop::new(file_path.clone());
 
         Ok(Self {
             file_path,
