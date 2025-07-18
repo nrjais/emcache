@@ -48,6 +48,13 @@ async fn create_entity(
         return Err((StatusCode::BAD_REQUEST, Json(json!({ "errors": errors }))));
     }
 
+    if state.entity_manager.get_entity(&request.name).is_some() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Entity already exists" })),
+        ));
+    }
+
     let entity = Entity {
         id: 0,
         name: request.name,
