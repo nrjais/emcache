@@ -10,6 +10,8 @@ use sqlx::prelude::FromRow;
 pub enum Operation {
     Upsert,
     Delete,
+    StartResync,
+    EndResync,
 }
 
 impl From<String> for Operation {
@@ -17,6 +19,8 @@ impl From<String> for Operation {
         match s.as_str() {
             "upsert" => Operation::Upsert,
             "delete" => Operation::Delete,
+            "start_resync" => Operation::StartResync,
+            "end_resync" => Operation::EndResync,
             _ => Operation::Upsert,
         }
     }
@@ -27,6 +31,8 @@ impl std::fmt::Display for Operation {
         match self {
             Operation::Upsert => write!(f, "upsert"),
             Operation::Delete => write!(f, "delete"),
+            Operation::StartResync => write!(f, "start_resync"),
+            Operation::EndResync => write!(f, "end_resync"),
         }
     }
 }
@@ -38,6 +44,8 @@ impl FromStr for Operation {
         match s.to_lowercase().as_str() {
             "upsert" => Ok(Operation::Upsert),
             "delete" => Ok(Operation::Delete),
+            "start_resync" => Ok(Operation::StartResync),
+            "end_resync" => Ok(Operation::EndResync),
             _ => Err(anyhow::anyhow!("Invalid operation: {}", s)),
         }
     }

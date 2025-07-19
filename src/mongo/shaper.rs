@@ -6,9 +6,20 @@ use mongodb::{
     change_stream::event::{ChangeStreamEvent, OperationType},
 };
 use serde_json::Value;
-use tracing::{debug, error};
+use thiserror::Error;
+use tracing::{debug, error, warn};
 
 use crate::types::{Entity, Operation, Oplog, OplogEvent, OplogFrom, Shape};
+
+#[derive(Debug, Error)]
+pub enum OplogError {
+    #[error("Invalidate event")]
+    Invalidate,
+    #[error("Document error: {0}")]
+    DocumentError(String),
+    #[error("Failed to extract data for entity: {0}")]
+    ExtractDataError(String),
+}
 
 fn extract_data(doc: &bson::Document, shape: &Shape) -> anyhow::Result<Vec<Value>> {
     let doc = serde_json::to_value(doc)?;
@@ -27,31 +38,37 @@ fn extract_data(doc: &bson::Document, shape: &Shape) -> anyhow::Result<Vec<Value
 pub fn map_oplog_from_change(
     event: ChangeStreamEvent<bson::Document>,
     entity: &Entity,
-) -> anyhow::Result<Option<OplogEvent>> {
+) -> Result<Option<OplogEvent>, OplogError> {
     let operation = match event.operation_type {
         OperationType::Insert | OperationType::Update | OperationType::Replace => Operation::Upsert,
         OperationType::Delete => Operation::Delete,
+        OperationType::Invalidate | OperationType::Rename | OperationType::Drop | OperationType::DropDatabase => {
+            return Err(OplogError::Invalidate);
+        }
         _ => {
-            debug!("Ignoring change event type: {:?}", event.operation_type);
+            warn!("Ignoring change event type: {:?}", event.operation_type);
             return Ok(None);
         }
     };
 
-    let resume_token = serde_json::to_value(event.id)?;
+    let resume_token = serde_json::to_value(event.id).map_err(|e| OplogError::DocumentError(e.to_string()))?;
 
     let Some(doc_key) = event.document_key else {
         debug!("Change event missing document_key");
         return Ok(None);
     };
 
-    let doc_id = doc_key.get("_id").context("Document id is not present")?;
-    let doc_id = extract_doc_id(doc_id)?;
+    let doc_id = doc_key
+        .get("_id")
+        .context("Document id is not present")
+        .map_err(|e| OplogError::DocumentError(e.to_string()))?;
+    let doc_id = extract_doc_id(doc_id).map_err(|e| OplogError::DocumentError(e.to_string()))?;
 
     let data = event
         .full_document
         .map(|doc| extract_data(&doc, &entity.shape))
         .transpose()
-        .inspect_err(|e| error!("Failed to extract data for entity '{}': {}", entity.name, e))?
+        .map_err(|e| OplogError::ExtractDataError(e.to_string()))?
         .unwrap_or_default();
 
     Ok(Some(OplogEvent {
@@ -68,12 +85,14 @@ pub fn map_oplog_from_change(
     }))
 }
 
-pub fn map_oplog_from_document(document: bson::Document, entity: &Entity) -> anyhow::Result<OplogEvent> {
-    let doc_id = document.get("_id").context("Document id is not present")?;
-    let doc_id = extract_doc_id(doc_id)?;
+pub fn map_oplog_from_document(document: bson::Document, entity: &Entity) -> Result<OplogEvent, OplogError> {
+    let doc_id = document
+        .get("_id")
+        .context("Document id is not present")
+        .map_err(|e| OplogError::DocumentError(e.to_string()))?;
+    let doc_id = extract_doc_id(doc_id).map_err(|e| OplogError::DocumentError(e.to_string()))?;
 
-    let data = extract_data(&document, &entity.shape)
-        .context(format!("Failed to extract data for entity: {}", entity.name))?;
+    let data = extract_data(&document, &entity.shape).map_err(|e| OplogError::ExtractDataError(e.to_string()))?;
 
     Ok(OplogEvent {
         oplog: Oplog {

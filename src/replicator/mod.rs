@@ -81,7 +81,7 @@ impl Replicator {
     }
 
     async fn cleanup_orphaned_databases(&self) -> anyhow::Result<()> {
-        info!("Cleaning up orphaned databases");
+        debug!("Cleaning up orphaned databases");
 
         let existing_entities = self.entity_manager.get_all_entities();
         let existing_entity_names: HashSet<String> = existing_entities.into_iter().map(|e| e.name).collect();
@@ -109,7 +109,7 @@ impl Replicator {
         *max_oplog_id = current_max_id;
 
         let _ = self.update_max_oplog_id(current_max_id).await;
-        info!("Processed {} oplogs, last processed id: {}", count, current_max_id);
+        debug!("Processed {} oplogs, last processed id: {}", count, current_max_id);
 
         count > 0
     }

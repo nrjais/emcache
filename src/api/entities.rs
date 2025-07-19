@@ -26,6 +26,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/entities", get(get_entities))
         .route("/entities", post(create_entity))
+        .route("/entities/resync", post(resync_entities))
         .route("/entities/{name}", get(get_entity))
         .route("/entities/{name}", delete(delete_entity))
 }
@@ -84,6 +85,11 @@ async fn get_entity(
         Some(entity) => Ok(Json(entity)),
         None => Err((StatusCode::NOT_FOUND, Json(json!({ "error": "Entity not found" })))),
     }
+}
+
+async fn resync_entities(State(state): State<AppState>) -> Result<Json<JsonValue>, (StatusCode, Json<JsonValue>)> {
+    let res = state.entity_manager.refresh_entities().await;
+    Ok(Json(json!({ "success": res.is_ok() })))
 }
 
 async fn delete_entity(

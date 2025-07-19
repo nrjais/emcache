@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM mongo_resume_tokens WHERE entity = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0985b33a3de1689870b57f30dd5d051cfcf2e7ec7a77d31957b5e00dd84915d2"
+}

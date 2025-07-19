@@ -80,6 +80,13 @@ impl ResumeTokenManager {
             }
         }
     }
+
+    pub async fn delete(&self, entity: &str) -> Result<(), anyhow::Error> {
+        let _ = sqlx::query!("DELETE FROM mongo_resume_tokens WHERE entity = $1", entity)
+            .execute(self.postgres.postgres())
+            .await?;
+        Ok(())
+    }
 }
 
 impl Task for ResumeTokenManager {

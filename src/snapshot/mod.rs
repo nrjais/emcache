@@ -9,7 +9,7 @@ use dashmap::DashMap;
 use tokio::fs;
 use tokio::time::{MissedTickBehavior, interval};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::config::Configs;
 use crate::entity::EntityManager;
@@ -134,7 +134,7 @@ impl Task for SnapshotManager {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    info!("Recreating stale snapshots");
+                    debug!("Recreating stale snapshots");
                     self.recreate_stale_snapshots().await;
                 }
                 _ = cancellation_token.cancelled() => {

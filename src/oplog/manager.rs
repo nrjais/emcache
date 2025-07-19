@@ -40,8 +40,6 @@ impl OplogManager {
             return Ok(());
         }
 
-        debug!("Flushing batch of {} oplogs", oplogs.len());
-
         let oplogs = oplogs.into_iter().map(|oplog| oplog.oplog).collect::<Vec<_>>();
 
         self.db_ops.insert_to_oplog(oplogs).await?;
