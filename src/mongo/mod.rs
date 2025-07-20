@@ -112,6 +112,9 @@ impl MongoClient {
                         Some(Ok(res)) => {
                             self.handle_stream_result(res).await;
                         }
+                        Some(Err(e)) if e.is_cancelled() => {
+                            info!("Change stream cancelled");
+                        }
                         Some(Err(e)) => {
                             error!("Failed to join stream: {e:?}");
                         }
