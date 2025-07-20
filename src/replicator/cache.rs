@@ -84,10 +84,10 @@ impl LocalCache {
                     Self::apply_delete(&tx, &self.entity, &oplog)?;
                 }
                 Operation::StartResync => {
-                    Self::apply_start_resync(&tx, &self.entity, &oplog)?;
+                    todo!()
                 }
                 Operation::EndResync => {
-                    Self::apply_end_resync(&tx, &self.entity, &oplog)?;
+                    todo!()
                 }
             }
             processed_count += 1;
@@ -105,14 +105,6 @@ impl LocalCache {
         self.max_oplog_id.store(max_processed_id, Ordering::Relaxed);
 
         Ok(())
-    }
-
-    fn apply_start_resync(tx: &Transaction, entity: &Entity, oplog: &Oplog) -> anyhow::Result<()> {
-        todo!()
-    }
-
-    fn apply_end_resync(tx: &Transaction, entity: &Entity, oplog: &Oplog) -> anyhow::Result<()> {
-        todo!()
     }
 
     fn apply_upsert(tx: &Transaction, entity: &Entity, oplog: &Oplog) -> anyhow::Result<()> {

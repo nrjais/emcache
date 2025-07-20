@@ -4,7 +4,7 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::executor::Task;
 use crate::types::OplogEvent;

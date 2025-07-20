@@ -89,6 +89,19 @@ impl MongoClient {
         let mut join_set = self.join_set.lock().await;
 
         loop {
+            if join_set.is_empty() {
+                info!("No streams to join, pausing for 10 seconds");
+                tokio::select! {
+                    _ = cancellation_token.cancelled() => {
+                        info!("Entity monitor received shutdown signal");
+                        break;
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                    }
+                }
+                continue;
+            }
+
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     info!("Entity monitor received shutdown signal");
@@ -116,8 +129,7 @@ impl MongoClient {
                             error!("Failed to join stream: {e:?}");
                         }
                         None => {
-                            info!("No stream to join, pausing for 10 seconds");
-                            tokio::time::sleep(Duration::from_secs(10)).await;
+                            info!("No stream to join, no live entities");
                         }
                     }
                 }
@@ -134,7 +146,7 @@ impl MongoClient {
     async fn handle_stream_result(&self, res: StreamResult) {
         match res {
             Ok(entity) => {
-                info!("Stream stopped for entity: {}", entity.name);
+                error!("Stream stopped for entity: {}", entity.name);
             }
             Err(StreamError::OplogError(entity, e)) => match e {
                 OplogError::DocumentError(e) => {
@@ -142,9 +154,10 @@ impl MongoClient {
                 }
                 OplogError::ExtractDataError(e) => error!("Extract data error for entity {}: {e}", entity.name),
                 OplogError::Invalidate => {
-                    info!("Invalidate stream event for entity {}: {e}", entity.name);
+                    error!("Invalidate stream event for entity {}", entity.name);
                     let _ = self.token_manager.delete(&entity.name).await;
                     self.active_streams.lock().await.remove(&entity.name);
+                    let _ = self.entity_manager.refresh_entities().await;
                 }
             },
             Err(StreamError::StreamError(entity, e)) => {
