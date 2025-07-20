@@ -6,12 +6,12 @@ use serde_json::Value as JsonValue;
 use sqlx::prelude::FromRow;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum Operation {
     Upsert,
     Delete,
-    StartResync,
-    EndResync,
+    SyncStart,
+    SyncEnd,
 }
 
 impl From<String> for Operation {
@@ -19,8 +19,8 @@ impl From<String> for Operation {
         match s.as_str() {
             "upsert" => Operation::Upsert,
             "delete" => Operation::Delete,
-            "start_resync" => Operation::StartResync,
-            "end_resync" => Operation::EndResync,
+            "sync_start" => Operation::SyncStart,
+            "sync_end" => Operation::SyncEnd,
             _ => Operation::Upsert,
         }
     }
@@ -31,8 +31,8 @@ impl std::fmt::Display for Operation {
         match self {
             Operation::Upsert => write!(f, "upsert"),
             Operation::Delete => write!(f, "delete"),
-            Operation::StartResync => write!(f, "start_resync"),
-            Operation::EndResync => write!(f, "end_resync"),
+            Operation::SyncStart => write!(f, "sync_start"),
+            Operation::SyncEnd => write!(f, "sync_end"),
         }
     }
 }
@@ -44,8 +44,8 @@ impl FromStr for Operation {
         match s.to_lowercase().as_str() {
             "upsert" => Ok(Operation::Upsert),
             "delete" => Ok(Operation::Delete),
-            "start_resync" => Ok(Operation::StartResync),
-            "end_resync" => Ok(Operation::EndResync),
+            "sync_start" => Ok(Operation::SyncStart),
+            "sync_end" => Ok(Operation::SyncEnd),
             _ => Err(anyhow::anyhow!("Invalid operation: {}", s)),
         }
     }

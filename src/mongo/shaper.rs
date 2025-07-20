@@ -1,3 +1,5 @@
+use std::default::Default;
+
 use anyhow::{Context, bail};
 use chrono::Utc;
 use jsonpath_rust::{parser::parse_json_path, query::js_path_process};
@@ -106,6 +108,36 @@ pub fn map_oplog_from_document(document: bson::Document, entity: &Entity) -> Res
         from: OplogFrom::Scan,
         data: Value::Null,
     })
+}
+
+pub fn restart_sync_oplog(entity: String) -> OplogEvent {
+    OplogEvent {
+        oplog: Oplog {
+            id: 0,
+            operation: Operation::SyncStart,
+            doc_id: Default::default(),
+            entity,
+            data: Value::Null,
+            created_at: Utc::now(),
+        },
+        from: OplogFrom::Scan,
+        data: Value::Null,
+    }
+}
+
+pub fn end_sync_oplog(entity: String) -> OplogEvent {
+    OplogEvent {
+        oplog: Oplog {
+            id: 0,
+            operation: Operation::SyncEnd,
+            doc_id: Default::default(),
+            entity,
+            data: Value::Null,
+            created_at: Utc::now(),
+        },
+        from: OplogFrom::Scan,
+        data: Value::Null,
+    }
 }
 
 fn extract_doc_id(doc_id: &Bson) -> anyhow::Result<String> {

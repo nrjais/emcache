@@ -83,12 +83,8 @@ impl LocalCache {
                 Operation::Delete => {
                     Self::apply_delete(&tx, &self.entity, &oplog)?;
                 }
-                Operation::StartResync => {
-                    todo!()
-                }
-                Operation::EndResync => {
-                    todo!()
-                }
+                Operation::SyncStart => {}
+                Operation::SyncEnd => {}
             }
             processed_count += 1;
             max_processed_id = max_processed_id.max(oplog.id as u64);

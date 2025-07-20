@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::Context;
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt, stream};
 use mongodb::{
     Client, Collection, Database,
     bson::{self, Document},
@@ -333,8 +333,18 @@ async fn collection_scan(
 ) -> anyhow::Result<impl Stream<Item = Result<OplogEvent, OplogError>> + Send + 'static> {
     let cursor = database.collection(&entity.source).find(bson::doc! {}).await?;
     info!("Starting collection scan for entity '{}'", &entity.name);
+    let entity_name = entity.name.clone();
+    let resync = stream::once({
+        let entity_name = entity_name.clone();
+        async move { Ok(shaper::restart_sync_oplog(entity_name)) }
+    });
     let stream = cursor.map(move |change| shaper::map_oplog_from_document(change.unwrap(), &entity));
-    Ok(stream)
+    let end = stream::once({
+        let entity_name = entity_name.clone();
+        async move { Ok(shaper::end_sync_oplog(entity_name)) }
+    });
+
+    Ok(resync.chain(stream).chain(end))
 }
 
 async fn start_stream(
