@@ -54,7 +54,7 @@ impl OplogManager {
         };
 
         let event_channel = receiver.expect("receiver is not initialized");
-        let mut stream = ReceiverStream::new(event_channel).chunks_timeout(100, Duration::from_millis(100));
+        let mut stream = ReceiverStream::new(event_channel).chunks_timeout(1000, Duration::from_millis(10));
         loop {
             tokio::select! {
                 Some(oplogs) = stream.next() => {

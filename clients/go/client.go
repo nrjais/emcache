@@ -50,8 +50,10 @@ import (
 type Operation string
 
 const (
-	OperationUpsert Operation = "upsert"
-	OperationDelete Operation = "delete"
+	OperationUpsert    Operation = "upsert"
+	OperationDelete    Operation = "delete"
+	OperationSyncStart Operation = "sync_start"
+	OperationSyncEnd   Operation = "sync_end"
 )
 
 // Data types for shape columns
@@ -593,6 +595,11 @@ func (c *Client) addEntityInternal(ctx context.Context, entityConfig EntityConfi
 	entity := &localCache{
 		db:      db,
 		details: entityDetails,
+		mode:    ModeLive,
+	}
+
+	if err := entity.loadMode(ctx); err != nil {
+		return nil, fmt.Errorf("failed to load mode for entity '%s': %w", entityConfig.Name, err)
 	}
 
 	return &entityState{

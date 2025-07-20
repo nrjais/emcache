@@ -58,6 +58,10 @@ func (m *MockEntity) Close() error {
 	return m.closeFunc()
 }
 
+func (m *MockEntity) CurrentMode() Mode {
+	return ModeLive
+}
+
 func setupTestClient() (*Client, *MockRoundTripper) {
 	mockTransport := &MockRoundTripper{}
 

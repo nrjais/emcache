@@ -7,29 +7,76 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// Mode represents the current synchronization mode
+type Mode int
+
+const (
+	ModeLive Mode = iota
+	ModeSync
+)
+
+func (m Mode) String() string {
+	switch m {
+	case ModeLive:
+		return "live"
+	case ModeSync:
+		return "sync"
+	default:
+		return "live"
+	}
+}
+
+func (m Mode) TableName() string {
+	switch m {
+	case ModeLive:
+		return dataTableName
+	case ModeSync:
+		return dataSyncTableName
+	default:
+		return dataTableName
+	}
+}
+
+func ModeFromString(s string) Mode {
+	switch s {
+	case "live":
+		return ModeLive
+	case "sync":
+		return ModeSync
+	default:
+		return ModeLive
+	}
+}
 
 type LocalCache interface {
 	DB() *sql.DB
 	GetMaxOplogId(ctx context.Context) (int64, error)
 	ApplyOplogs(ctx context.Context, oplogs []Oplog) error
 	Close() error
+	CurrentMode() Mode
 }
 
 const (
 	metadataTableName = "metadata"
 	maxOplogId        = "max_oplog_id"
+	modeKey           = "mode"
 )
 const (
-	dataTableName = "data"
-	pkColumn      = "id"
+	dataTableName     = "data"
+	dataSyncTableName = "data_sync"
+	pkColumn          = "id"
 )
 
 type localCache struct {
 	db      *sql.DB
 	details *Entity
+	mode    Mode
+	modeMu  sync.RWMutex
 }
 
 func openSQLiteDB(dbPath string) (*sql.DB, error) {
@@ -96,6 +143,7 @@ func (e *localCache) ApplyOplogs(ctx context.Context, oplogs []Oplog) error {
 	defer tx.Rollback()
 
 	var maxProcessedID int64
+	currentMode := e.CurrentMode()
 
 	for _, entry := range oplogs {
 		if entry.ID > maxProcessedID {
@@ -104,23 +152,44 @@ func (e *localCache) ApplyOplogs(ctx context.Context, oplogs []Oplog) error {
 
 		switch entry.Operation {
 		case OperationUpsert:
-			err = e.applyUpsert(ctx, tx, entry, entry.DocID)
+			err = e.applyUpsert(ctx, tx, entry, entry.DocID, currentMode)
 			if err != nil {
 				return fmt.Errorf("failed to apply upsert for doc_id %s: %w", entry.DocID, err)
 			}
 
 		case OperationDelete:
-			err = e.applyDelete(ctx, tx, entry.DocID)
+			err = e.applyDelete(ctx, tx, entry.DocID, currentMode)
 			if err != nil {
 				return fmt.Errorf("failed to apply delete for doc_id %s: %w", entry.DocID, err)
 			}
+
+		case OperationSyncStart:
+			err = e.applySyncStart(ctx, tx)
+			if err != nil {
+				return fmt.Errorf("failed to apply sync start: %w", err)
+			}
+			currentMode = ModeSync
+
+		case OperationSyncEnd:
+			err = e.applySyncEnd(ctx, tx)
+			if err != nil {
+				return fmt.Errorf("failed to apply sync end: %w", err)
+			}
+			currentMode = ModeLive
+
 		default:
+			// Unknown operation, skip
 		}
 	}
 
 	err = e.setLastProcessedID(ctx, tx, maxProcessedID)
 	if err != nil {
 		return fmt.Errorf("failed to update last processed ID: %w", err)
+	}
+
+	err = e.setMode(ctx, tx, currentMode)
+	if err != nil {
+		return fmt.Errorf("failed to update mode: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -131,7 +200,7 @@ func (e *localCache) ApplyOplogs(ctx context.Context, oplogs []Oplog) error {
 }
 
 // applyUpsert handles upsert operations consistent with server logic
-func (e *localCache) applyUpsert(ctx context.Context, tx *sql.Tx, entry Oplog, pkValue string) error {
+func (e *localCache) applyUpsert(ctx context.Context, tx *sql.Tx, entry Oplog, pkValue string, mode Mode) error {
 	if e.details == nil {
 		return fmt.Errorf("entity details are not available")
 	}
@@ -139,6 +208,8 @@ func (e *localCache) applyUpsert(ctx context.Context, tx *sql.Tx, entry Oplog, p
 	if entry.Data == nil {
 		return fmt.Errorf("missing data for oplog entry")
 	}
+
+	tableName := mode.TableName()
 
 	// Build column names and placeholders for INSERT OR REPLACE
 	columns := []string{pkColumn}
@@ -160,7 +231,7 @@ func (e *localCache) applyUpsert(ctx context.Context, tx *sql.Tx, entry Oplog, p
 
 	// Build and execute INSERT OR REPLACE query
 	query := fmt.Sprintf("INSERT OR REPLACE INTO %s (%s) VALUES (%s)",
-		dataTableName,
+		tableName,
 		strings.Join(columns, ", "),
 		strings.Join(placeholders, ", "),
 	)
@@ -174,8 +245,9 @@ func (e *localCache) applyUpsert(ctx context.Context, tx *sql.Tx, entry Oplog, p
 }
 
 // applyDelete handles delete operations consistent with server logic
-func (e *localCache) applyDelete(ctx context.Context, tx *sql.Tx, pkValue string) error {
-	query := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", dataTableName, pkColumn)
+func (e *localCache) applyDelete(ctx context.Context, tx *sql.Tx, pkValue string, mode Mode) error {
+	tableName := mode.TableName()
+	query := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", tableName, pkColumn)
 	_, err := tx.ExecContext(ctx, query, pkValue)
 	if err != nil {
 		return fmt.Errorf("failed to execute delete query: %w", err)
@@ -209,4 +281,91 @@ func encodeValue(value any) (any, error) {
 	default:
 		return json.Marshal(value)
 	}
+}
+
+// CurrentMode returns the current cached mode
+func (e *localCache) CurrentMode() Mode {
+	e.modeMu.RLock()
+	defer e.modeMu.RUnlock()
+	return e.mode
+}
+
+// setModeUnsafe sets the mode without acquiring locks (internal use only)
+func (e *localCache) setModeUnsafe(mode Mode) {
+	e.mode = mode
+}
+
+// loadMode loads the current mode from the metadata table
+func (e *localCache) loadMode(ctx context.Context) error {
+	query := fmt.Sprintf("SELECT value FROM %s WHERE key = ?", metadataTableName)
+	row := e.db.QueryRowContext(ctx, query, modeKey)
+
+	var value string
+	if err := row.Scan(&value); err != nil {
+		if err == sql.ErrNoRows {
+			// Default to live mode if no record exists
+			e.modeMu.Lock()
+			e.mode = ModeLive
+			e.modeMu.Unlock()
+			return nil
+		}
+		return fmt.Errorf("failed to load mode: %w", err)
+	}
+
+	mode := ModeFromString(value)
+	e.modeMu.Lock()
+	e.mode = mode
+	e.modeMu.Unlock()
+	return nil
+}
+
+// setMode updates the mode in both memory and database
+func (e *localCache) setMode(ctx context.Context, tx *sql.Tx, mode Mode) error {
+	query := fmt.Sprintf(
+		"INSERT INTO %s (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+		metadataTableName,
+	)
+	_, err := tx.ExecContext(ctx, query, modeKey, mode.String())
+	if err != nil {
+		return fmt.Errorf("failed to set mode: %w", err)
+	}
+
+	e.modeMu.Lock()
+	e.mode = mode
+	e.modeMu.Unlock()
+	return nil
+}
+
+// applySyncStart handles sync start operation
+func (e *localCache) applySyncStart(ctx context.Context, tx *sql.Tx) error {
+	// Create data_sync table as a copy of data table
+	createSyncTableQuery := fmt.Sprintf(
+		"CREATE TABLE IF NOT EXISTS %s AS SELECT * FROM %s",
+		dataSyncTableName, dataTableName,
+	)
+	_, err := tx.ExecContext(ctx, createSyncTableQuery)
+	if err != nil {
+		return fmt.Errorf("failed to create sync table: %w", err)
+	}
+
+	return nil
+}
+
+// applySyncEnd handles sync end operation
+func (e *localCache) applySyncEnd(ctx context.Context, tx *sql.Tx) error {
+	// Drop the data table
+	dropDataQuery := fmt.Sprintf("DROP TABLE IF EXISTS %s", dataTableName)
+	_, err := tx.ExecContext(ctx, dropDataQuery)
+	if err != nil {
+		return fmt.Errorf("failed to drop data table: %w", err)
+	}
+
+	// Rename data_sync to data
+	renameQuery := fmt.Sprintf("ALTER TABLE %s RENAME TO %s", dataSyncTableName, dataTableName)
+	_, err = tx.ExecContext(ctx, renameQuery)
+	if err != nil {
+		return fmt.Errorf("failed to rename sync table: %w", err)
+	}
+
+	return nil
 }

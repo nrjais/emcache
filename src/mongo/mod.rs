@@ -89,19 +89,6 @@ impl MongoClient {
         let mut join_set = self.join_set.lock().await;
 
         loop {
-            if join_set.is_empty() {
-                info!("No streams to join, pausing for 10 seconds");
-                tokio::select! {
-                    _ = cancellation_token.cancelled() => {
-                        info!("Entity monitor received shutdown signal");
-                        break;
-                    }
-                    _ = tokio::time::sleep(Duration::from_secs(10)) => {
-                    }
-                }
-                continue;
-            }
-
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     info!("Entity monitor received shutdown signal");
@@ -129,7 +116,11 @@ impl MongoClient {
                             error!("Failed to join stream: {e:?}");
                         }
                         None => {
-                            info!("No stream to join, no live entities");
+                            info!("No stream to join, no live entities, pausing for 10 seconds");
+                            tokio::select! {
+                                _ = cancellation_token.cancelled() => {}
+                                _ = tokio::time::sleep(Duration::from_secs(10)) => {}
+                            }
                         }
                     }
                 }
