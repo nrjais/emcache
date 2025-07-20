@@ -9,9 +9,9 @@ use axum::{
 };
 use axum_extra::extract::WithRejection;
 use garde::{Error, Validate};
-use jsonpath_rust::parser::parse_json_path;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
+use serde_json_path::JsonPath;
 use serde_with::{DefaultOnNull, serde_as};
 use tracing::{error, info};
 
@@ -213,7 +213,7 @@ impl From<IndexRequest> for Index {
 }
 
 fn validate_path(path: &str, _conf: &Configs) -> garde::Result {
-    parse_json_path(path)
+    JsonPath::parse(path)
         .map(|_| ())
         .map_err(|e| Error::new(format!("Invalid JSONPath: {path}, {e}")))
 }

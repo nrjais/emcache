@@ -2,12 +2,12 @@ use std::default::Default;
 
 use anyhow::{Context, bail};
 use chrono::Utc;
-use jsonpath_rust::{parser::parse_json_path, query::js_path_process};
 use mongodb::{
     bson::{self, Bson},
     change_stream::event::{ChangeStreamEvent, OperationType},
 };
 use serde_json::Value;
+use serde_json_path::JsonPath;
 use thiserror::Error;
 use tracing::{debug, error, warn};
 
@@ -27,10 +27,9 @@ fn extract_data(doc: &bson::Document, shape: &Shape) -> anyhow::Result<Vec<Value
     let doc = serde_json::to_value(doc)?;
     let mut data = Vec::new();
     for column in &shape.columns {
-        let path = parse_json_path(&column.path).context(format!("Failed to parse path: {}", column.path))?;
-        let process = js_path_process(&path, &doc).context(format!("Failed to process path: {}", column.path))?;
-        let first = process.into_iter().next();
-        let value = first.map(|v| v.val().clone()).unwrap_or(Value::Null);
+        // Cache the parsed path
+        let path = JsonPath::parse(&column.path).context(format!("Failed to parse path: {}", column.path))?;
+        let value = path.query(&doc).first().cloned().unwrap_or(Value::Null);
         data.push(value);
     }
 
