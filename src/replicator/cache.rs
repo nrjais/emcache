@@ -8,12 +8,13 @@ use std::{
 };
 
 use anyhow::Context;
-use rusqlite::{Connection, ToSql, Transaction, backup::Backup, params};
+use rusqlite::{Connection, Error::QueryReturnedNoRows, ToSql, Transaction, backup::Backup, params};
 use tracing::debug;
 
 use crate::replicator::{
     mapper::generate_insert_query,
-    migrator::{DATA_TABLE, METADATA_TABLE},
+    migrator::{DATA_SYNC_TABLE, DATA_TABLE, METADATA_TABLE},
+    mode::Mode,
 };
 use crate::{
     replicator::migrator::run_migrations,
@@ -21,12 +22,14 @@ use crate::{
 };
 
 const MAX_OPLOG_ID_KEY: &str = "max_oplog_id";
+const MODE_KEY: &str = "mode";
 
 #[derive(Debug, Clone)]
 pub struct LocalCache {
     db: Arc<Mutex<Connection>>,
     entity: Entity,
     max_oplog_id: Arc<AtomicU64>,
+    mode: Arc<Mutex<Mode>>,
 }
 
 impl LocalCache {
@@ -35,6 +38,7 @@ impl LocalCache {
             db,
             entity,
             max_oplog_id: Arc::new(AtomicU64::new(0)),
+            mode: Arc::new(Mutex::new(Mode::Live)),
         }
     }
 
@@ -45,6 +49,10 @@ impl LocalCache {
 
         let max_oplog_id = self.load_max_oplog_id()?;
         self.max_oplog_id.store(max_oplog_id, Ordering::Relaxed);
+
+        let mode = self.load_mode()?;
+        *self.mode.lock().unwrap() = mode;
+
         Ok(())
     }
 
@@ -57,7 +65,21 @@ impl LocalCache {
 
         match result {
             Ok(value) => Ok(value),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
+            Err(QueryReturnedNoRows) => Ok(0),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn load_mode(&self) -> anyhow::Result<Mode> {
+        let conn = self.db.lock().unwrap();
+        let query = format!("SELECT value FROM {METADATA_TABLE} WHERE key = ?");
+
+        let mut stmt = conn.prepare(&query)?;
+        let result: Result<String, rusqlite::Error> = stmt.query_row(params![MODE_KEY], |row| row.get(0));
+
+        match result {
+            Ok(value) => Ok(value.into()),
+            Err(QueryReturnedNoRows) => Ok(Mode::Live),
             Err(e) => Err(e.into()),
         }
     }
@@ -75,27 +97,38 @@ impl LocalCache {
         let mut processed_count = 0;
         let mut max_processed_id = 0;
 
+        let mut mode = self.mode.lock().unwrap();
+        let mut current_mode = *mode;
+
         for oplog in oplogs {
             match oplog.operation {
                 Operation::Upsert => {
-                    Self::apply_upsert(&tx, &self.entity, &oplog)?;
+                    Self::apply_upsert(&tx, &self.entity, &oplog, current_mode)?;
                 }
                 Operation::Delete => {
-                    Self::apply_delete(&tx, &self.entity, &oplog)?;
+                    Self::apply_delete(&tx, &self.entity, &oplog, current_mode)?;
                 }
-                Operation::SyncStart => {}
-                Operation::SyncEnd => {}
+                Operation::SyncStart => {
+                    Self::apply_sync_start(&tx, &self.entity)?;
+                    current_mode = Mode::Sync;
+                }
+                Operation::SyncEnd => {
+                    Self::apply_sync_end(&tx, &self.entity)?;
+                    current_mode = Mode::Live;
+                }
             }
             processed_count += 1;
             max_processed_id = max_processed_id.max(oplog.id as u64);
         }
 
         self.set_max_oplog_id(&tx, max_processed_id)?;
+        self.set_mode(&tx, current_mode)?;
         tx.commit().context("Failed to commit transaction")?;
+        *mode = current_mode;
 
         debug!(
-            "Successfully applied {} oplogs for entity {}",
-            processed_count, self.entity.name
+            "Successfully applied {} oplogs for entity {}, mode: {}",
+            processed_count, self.entity.name, current_mode
         );
 
         self.max_oplog_id.store(max_processed_id, Ordering::Relaxed);
@@ -103,38 +136,80 @@ impl LocalCache {
         Ok(())
     }
 
-    fn apply_upsert(tx: &Transaction, entity: &Entity, oplog: &Oplog) -> anyhow::Result<()> {
-        let (query, values) = generate_insert_query(entity, oplog)?;
+    fn apply_upsert(tx: &Transaction, entity: &Entity, oplog: &Oplog, mode: Mode) -> anyhow::Result<()> {
+        let table_name = mode.table_name();
+
+        let (query, values) = generate_insert_query(entity, oplog, table_name)?;
         let params = values.iter().map(|v| v as &dyn ToSql).collect::<Vec<_>>();
 
         tx.execute(&query, params.as_slice())
             .map_err(|e| anyhow::anyhow!("Failed to apply upsert: {}, query: {}", e, query))?;
 
-        debug!("Applied upsert for doc_id {} in entity {}", oplog.doc_id, entity.name);
+        debug!(
+            "Applied upsert for doc_id {} in entity {} to table {}",
+            oplog.doc_id, entity.name, table_name
+        );
         Ok(())
     }
 
-    fn apply_delete(tx: &Transaction, entity: &Entity, oplog: &Oplog) -> anyhow::Result<()> {
-        let query = format!("DELETE FROM {DATA_TABLE} WHERE id = ?1");
+    fn apply_delete(tx: &Transaction, entity: &Entity, oplog: &Oplog, mode: Mode) -> anyhow::Result<()> {
+        let table_name = mode.table_name();
+
+        let query = format!("DELETE FROM {table_name} WHERE id = ?1");
         let rows_affected = tx
             .execute(&query, params![&oplog.doc_id])
             .context("Failed to apply delete")?;
 
         debug!(
-            "Applied delete for doc_id {} in entity {} (rows affected: {})",
-            oplog.doc_id, entity.name, rows_affected
+            "Applied delete for doc_id {} in entity {} from table {} (rows affected: {})",
+            oplog.doc_id, entity.name, table_name, rows_affected
         );
         Ok(())
     }
 
-    fn set_max_oplog_id(&self, tx: &Transaction, max_oplog_id: u64) -> anyhow::Result<()> {
-        let query = format!(
-            "INSERT INTO {METADATA_TABLE} (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-        );
+    fn apply_sync_start(tx: &Transaction, entity: &Entity) -> anyhow::Result<()> {
+        debug!("Starting sync for entity {}", entity.name);
 
+        let create_sync_table_query =
+            format!("CREATE TABLE IF NOT EXISTS {DATA_SYNC_TABLE} AS SELECT * FROM {DATA_TABLE}");
+        tx.execute(&create_sync_table_query, [])?;
+
+        debug!("Successfully started sync for entity {}", entity.name);
+        Ok(())
+    }
+
+    fn apply_sync_end(tx: &Transaction, entity: &Entity) -> anyhow::Result<()> {
+        debug!("Ending sync for entity {}", entity.name);
+
+        let drop_data_query = format!("DROP TABLE IF EXISTS {DATA_TABLE}");
+        tx.execute(&drop_data_query, [])?;
+
+        let rename_query = format!("ALTER TABLE {DATA_SYNC_TABLE} RENAME TO {DATA_TABLE}");
+        tx.execute(&rename_query, [])?;
+
+        debug!("Successfully ended sync for entity {}", entity.name);
+        Ok(())
+    }
+
+    fn set_max_oplog_id(&self, tx: &Transaction, max_oplog_id: u64) -> anyhow::Result<()> {
+        let query = self.metadata_insert_query();
         tx.execute(&query, params![MAX_OPLOG_ID_KEY, max_oplog_id])
             .context("Failed to set last processed id")?;
         Ok(())
+    }
+
+    fn set_mode(&self, tx: &Transaction, mode: Mode) -> anyhow::Result<()> {
+        let query = self.metadata_insert_query();
+        let mode_str: String = mode.into();
+        tx.execute(&query, params![MODE_KEY, mode_str])
+            .context("Failed to set mode")?;
+        Ok(())
+    }
+
+    fn metadata_insert_query(&self) -> String {
+        format!(
+            "INSERT INTO {METADATA_TABLE} (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        )
     }
 
     pub fn snapshot_to(&self, snapshot_path: &Path) -> anyhow::Result<u64> {
@@ -148,5 +223,9 @@ impl LocalCache {
 
     pub fn max_oplog_id(&self) -> u64 {
         self.max_oplog_id.load(Ordering::Relaxed)
+    }
+
+    pub fn current_mode(&self) -> Mode {
+        *self.mode.lock().unwrap()
     }
 }

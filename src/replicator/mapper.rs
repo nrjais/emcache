@@ -4,10 +4,7 @@ use rusqlite::{
 };
 use serde_json::Value as JsonValue;
 
-use crate::{
-    replicator::migrator::DATA_TABLE,
-    types::{Entity, Oplog},
-};
+use crate::types::{Entity, Oplog};
 
 #[derive(Debug)]
 pub enum SqlValue {
@@ -51,7 +48,11 @@ impl TryFrom<&JsonValue> for SqlValue {
     }
 }
 
-pub fn generate_insert_query(entity: &Entity, oplog: &Oplog) -> anyhow::Result<(String, Vec<SqlValue>)> {
+pub fn generate_insert_query(
+    entity: &Entity,
+    oplog: &Oplog,
+    table_name: &str,
+) -> anyhow::Result<(String, Vec<SqlValue>)> {
     let mut values = Vec::new();
     let mut placeholders = String::new();
     let mut columns = String::new();
@@ -75,7 +76,7 @@ pub fn generate_insert_query(entity: &Entity, oplog: &Oplog) -> anyhow::Result<(
         columns.push_str(&column.name);
     }
 
-    let query = format!("INSERT OR REPLACE INTO {DATA_TABLE} ({columns}) VALUES ({placeholders})");
+    let query = format!("INSERT OR REPLACE INTO {table_name} ({columns}) VALUES ({placeholders})");
 
     Ok((query, values))
 }

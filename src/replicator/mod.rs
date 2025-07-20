@@ -16,6 +16,7 @@ pub mod cache;
 mod mapper;
 pub mod metadata;
 mod migrator;
+mod mode;
 pub mod sqlite;
 
 pub struct Replicator {

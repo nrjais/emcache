@@ -5,6 +5,7 @@ use crate::types::{DataType, IdType, Shape};
 
 pub const DATA_TABLE: &str = "data";
 pub const METADATA_TABLE: &str = "metadata";
+pub const DATA_SYNC_TABLE: &str = "data_sync";
 
 fn sqlite_type(typ: DataType) -> String {
     match typ {
