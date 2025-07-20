@@ -86,6 +86,7 @@ impl MongoClient {
         info!("Starting entity monitor for MongoDB change streams");
 
         let mut broadcast_rx = self.entity_manager.broadcast();
+        let mut broadcast_rx_copy = self.entity_manager.broadcast();
         let mut join_set = self.join_set.lock().await;
 
         loop {
@@ -122,6 +123,7 @@ impl MongoClient {
                             info!("No stream to join, no live entities, pausing for 10 seconds");
                             tokio::select! {
                                 _ = cancellation_token.cancelled() => {}
+                                _ = broadcast_rx_copy.recv() => {}
                                 _ = tokio::time::sleep(Duration::from_secs(10)) => {}
                             }
                         }

@@ -70,7 +70,8 @@ pub fn map_oplog_from_change(
         .map(|doc| extract_data(&doc, &entity.shape))
         .transpose()
         .map_err(|e| OplogError::ExtractDataError(e.to_string()))?
-        .unwrap_or_default();
+        .map(|data| Value::Array(data))
+        .unwrap_or(Value::Null);
 
     Ok(Some(OplogEvent {
         oplog: Oplog {
@@ -78,7 +79,7 @@ pub fn map_oplog_from_change(
             operation,
             doc_id,
             entity: entity.name.clone(),
-            data: Value::Array(data),
+            data,
             created_at: Utc::now(),
         },
         from: OplogFrom::Live,
