@@ -47,7 +47,7 @@ func syncToLatest(t *testing.T, client *emcache.Client) {
 	t.Helper()
 	ctx := context.Background()
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(5 * time.Second)
 	err := client.SyncOnce(ctx)
 	require.NoError(t, err, "Failed to sync to latest")
 }
