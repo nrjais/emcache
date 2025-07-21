@@ -290,11 +290,6 @@ func (e *localCache) CurrentMode() Mode {
 	return e.mode
 }
 
-// setModeUnsafe sets the mode without acquiring locks (internal use only)
-func (e *localCache) setModeUnsafe(mode Mode) {
-	e.mode = mode
-}
-
 // loadMode loads the current mode from the metadata table
 func (e *localCache) loadMode(ctx context.Context) error {
 	query := fmt.Sprintf("SELECT value FROM %s WHERE key = ?", metadataTableName)

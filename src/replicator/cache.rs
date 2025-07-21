@@ -170,9 +170,8 @@ impl LocalCache {
     fn apply_sync_start(tx: &Transaction, entity: &Entity) -> anyhow::Result<()> {
         debug!("Starting sync for entity {}", entity.name);
 
-        let create_sync_table_query =
-            format!("CREATE TABLE IF NOT EXISTS {DATA_SYNC_TABLE} AS SELECT * FROM {DATA_TABLE}");
-        tx.execute(&create_sync_table_query, [])?;
+        let truncate_sync_table_query = format!("DELETE FROM {DATA_SYNC_TABLE}");
+        tx.execute(&truncate_sync_table_query, [])?;
 
         debug!("Successfully started sync for entity {}", entity.name);
         Ok(())
@@ -181,11 +180,18 @@ impl LocalCache {
     fn apply_sync_end(tx: &Transaction, entity: &Entity) -> anyhow::Result<()> {
         debug!("Ending sync for entity {}", entity.name);
 
-        let drop_data_query = format!("DROP TABLE IF EXISTS {DATA_TABLE}");
-        tx.execute(&drop_data_query, [])?;
+        // Swap tables: data -> data_temp, data_sync -> data, data_temp -> data_sync
+        let rename_data_to_temp_query = format!("ALTER TABLE {DATA_TABLE} RENAME TO data_temp");
+        tx.execute(&rename_data_to_temp_query, [])?;
 
-        let rename_query = format!("ALTER TABLE {DATA_SYNC_TABLE} RENAME TO {DATA_TABLE}");
-        tx.execute(&rename_query, [])?;
+        let rename_sync_to_data_query = format!("ALTER TABLE {DATA_SYNC_TABLE} RENAME TO {DATA_TABLE}");
+        tx.execute(&rename_sync_to_data_query, [])?;
+
+        let rename_temp_to_sync_query = format!("ALTER TABLE data_temp RENAME TO {DATA_SYNC_TABLE}");
+        tx.execute(&rename_temp_to_sync_query, [])?;
+
+        let truncate_sync_table_query = format!("DELETE FROM {DATA_SYNC_TABLE}");
+        tx.execute(&truncate_sync_table_query, [])?;
 
         debug!("Successfully ended sync for entity {}", entity.name);
         Ok(())

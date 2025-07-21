@@ -54,6 +54,9 @@ fn create_tables(conn: &Connection, shape: &Shape) -> Result<(), anyhow::Error> 
     let query = format!("CREATE TABLE IF NOT EXISTS {DATA_TABLE} ({columns})");
     conn.execute(&query, [])?;
 
+    let sync_query = format!("CREATE TABLE IF NOT EXISTS {DATA_SYNC_TABLE} ({columns})");
+    conn.execute(&sync_query, [])?;
+
     let meta = format!("CREATE TABLE IF NOT EXISTS {METADATA_TABLE} (key TEXT PRIMARY KEY, value ANY NOT NULL) STRICT");
     conn.execute(&meta, [])?;
 
@@ -72,6 +75,9 @@ fn create_indexes(conn: &Connection, shape: &Shape) -> anyhow::Result<()> {
         let name = quote_name(&index.name);
         let query = format!("CREATE INDEX IF NOT EXISTS {name} ON {DATA_TABLE} ({columns})");
         conn.execute(&query, [])?;
+
+        let sync_query = format!("CREATE INDEX IF NOT EXISTS {name} ON {DATA_SYNC_TABLE} ({columns})");
+        conn.execute(&sync_query, [])?;
     }
 
     Ok(())
