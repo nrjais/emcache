@@ -331,35 +331,40 @@ func (e *localCache) setMode(ctx context.Context, tx *sql.Tx, mode Mode) error {
 	return nil
 }
 
-// applySyncStart handles sync start operation
 func (e *localCache) applySyncStart(ctx context.Context, tx *sql.Tx) error {
-	// Create data_sync table as a copy of data table
-	createSyncTableQuery := fmt.Sprintf(
-		"CREATE TABLE IF NOT EXISTS %s AS SELECT * FROM %s",
-		dataSyncTableName, dataTableName,
-	)
-	_, err := tx.ExecContext(ctx, createSyncTableQuery)
+	truncateSyncTableQuery := fmt.Sprintf("DELETE FROM %s", dataSyncTableName)
+	_, err := tx.ExecContext(ctx, truncateSyncTableQuery)
 	if err != nil {
-		return fmt.Errorf("failed to create sync table: %w", err)
+		return fmt.Errorf("failed to truncate sync table: %w", err)
 	}
 
 	return nil
 }
 
-// applySyncEnd handles sync end operation
 func (e *localCache) applySyncEnd(ctx context.Context, tx *sql.Tx) error {
-	// Drop the data table
-	dropDataQuery := fmt.Sprintf("DROP TABLE IF EXISTS %s", dataTableName)
-	_, err := tx.ExecContext(ctx, dropDataQuery)
+	// Swap tables: data -> data_temp, data_sync -> data, data_temp -> data_sync
+	renameDataToTempQuery := fmt.Sprintf("ALTER TABLE %s RENAME TO data_temp", dataTableName)
+	_, err := tx.ExecContext(ctx, renameDataToTempQuery)
 	if err != nil {
-		return fmt.Errorf("failed to drop data table: %w", err)
+		return fmt.Errorf("failed to rename data table to temp: %w", err)
 	}
 
-	// Rename data_sync to data
-	renameQuery := fmt.Sprintf("ALTER TABLE %s RENAME TO %s", dataSyncTableName, dataTableName)
-	_, err = tx.ExecContext(ctx, renameQuery)
+	renameSyncToDataQuery := fmt.Sprintf("ALTER TABLE %s RENAME TO %s", dataSyncTableName, dataTableName)
+	_, err = tx.ExecContext(ctx, renameSyncToDataQuery)
 	if err != nil {
-		return fmt.Errorf("failed to rename sync table: %w", err)
+		return fmt.Errorf("failed to rename sync table to data: %w", err)
+	}
+
+	renameTempToSyncQuery := fmt.Sprintf("ALTER TABLE data_temp RENAME TO %s", dataSyncTableName)
+	_, err = tx.ExecContext(ctx, renameTempToSyncQuery)
+	if err != nil {
+		return fmt.Errorf("failed to rename temp table to sync: %w", err)
+	}
+
+	truncateSyncTableQuery := fmt.Sprintf("DELETE FROM %s", dataSyncTableName)
+	_, err = tx.ExecContext(ctx, truncateSyncTableQuery)
+	if err != nil {
+		return fmt.Errorf("failed to truncate sync table: %w", err)
 	}
 
 	return nil
