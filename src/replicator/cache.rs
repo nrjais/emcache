@@ -113,8 +113,10 @@ impl LocalCache {
                     current_mode = Mode::Sync;
                 }
                 Operation::SyncEnd => {
-                    Self::apply_sync_end(&tx, &self.entity)?;
-                    current_mode = Mode::Live;
+                    if current_mode == Mode::Sync {
+                        Self::apply_sync_end(&tx, &self.entity)?;
+                        current_mode = Mode::Live;
+                    }
                 }
             }
             processed_count += 1;
