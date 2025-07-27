@@ -301,7 +301,7 @@ func (c *Client) syncToLatest(ctx context.Context, maxOplogID int64) error {
 }
 
 func (c *Client) CreateEntity(ctx context.Context, req CreateEntityRequest) (*Entity, error) {
-	url := fmt.Sprintf("%s/api/entities", c.config.ServerURL)
+	url := fmt.Sprintf("%s/api/entity", c.config.ServerURL)
 	var entity Entity
 	var errorResponse ErrorResponse
 
@@ -328,7 +328,7 @@ func (c *Client) CreateEntity(ctx context.Context, req CreateEntityRequest) (*En
 
 // RemoveEntity removes an entity from the server.
 func (c *Client) RemoveEntity(ctx context.Context, name string) error {
-	url := fmt.Sprintf("%s/api/entities/%s", c.config.ServerURL, name)
+	url := fmt.Sprintf("%s/api/entity/%s", c.config.ServerURL, name)
 
 	resp, err := c.httpClient.R().
 		SetContext(ctx).
@@ -347,7 +347,7 @@ func (c *Client) RemoveEntity(ctx context.Context, name string) error {
 
 // GetEntities retrieves information about available entities from the server.
 func (c *Client) GetEntities(ctx context.Context) ([]Entity, error) {
-	url := fmt.Sprintf("%s/api/entities", c.config.ServerURL)
+	url := fmt.Sprintf("%s/api/entity", c.config.ServerURL)
 	var entities []Entity
 
 	resp, err := c.httpClient.R().
@@ -387,7 +387,7 @@ func (c *Client) closeConnections() error {
 
 // getEntitiesFromServer retrieves entities from the server
 func (c *Client) getEntitiesFromServer(ctx context.Context, entityNames []string) ([]Entity, error) {
-	url := fmt.Sprintf("%s/api/entities", c.config.ServerURL)
+	url := fmt.Sprintf("%s/api/entity", c.config.ServerURL)
 	var entities []Entity
 	var errorResponse ErrorResponse
 

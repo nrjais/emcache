@@ -24,11 +24,11 @@ use crate::{
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/entities", get(get_entities))
-        .route("/entities", post(create_entity))
-        .route("/entities/resync", post(resync_entities))
-        .route("/entities/{name}", get(get_entity))
-        .route("/entities/{name}", delete(delete_entity))
+        .route("/entity", get(get_entities))
+        .route("/entity", post(create_entity))
+        .route("/entity/refresh", post(refresh_entities))
+        .route("/entity/{name}", get(get_entity))
+        .route("/entity/{name}", delete(delete_entity))
 }
 
 async fn get_entities(State(state): State<AppState>) -> Json<Vec<Entity>> {
@@ -87,7 +87,7 @@ async fn get_entity(
     }
 }
 
-async fn resync_entities(State(state): State<AppState>) -> Result<Json<JsonValue>, (StatusCode, Json<JsonValue>)> {
+async fn refresh_entities(State(state): State<AppState>) -> Result<Json<JsonValue>, (StatusCode, Json<JsonValue>)> {
     let res = state.entity_manager.refresh_entities().await;
     Ok(Json(json!({ "success": res.is_ok() })))
 }

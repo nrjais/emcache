@@ -6,23 +6,6 @@ A high-performance cache replication system that synchronizes data from MongoDB 
 
 EMCache is a distributed caching system designed to replicate MongoDB data to fast local SQLite databases. It provides real-time synchronization through MongoDB change streams and maintains consistency through an oplog-based architecture stored in PostgreSQL.
 
-## Architecture
-
-```
-MongoDB → Change Streams → Oplog Manager → PostgreSQL → Cache Replicator → SQLite Caches
-                                                      ↓
-                                                  REST API
-```
-
-### Key Components
-
-- **MongoDB Change Stream Listener**: Captures real-time document changes from MongoDB collections
-- **Oplog Manager**: Processes change events and stores them as operation logs in PostgreSQL
-- **Cache Replicator**: Applies oplogs to local SQLite databases with background synchronization
-- **Entity Manager**: Manages entity definitions and lifecycle operations
-- **Snapshot Manager**: Creates and manages point-in-time snapshots of cache data
-- **REST API**: Provides comprehensive management endpoints for entities, oplogs, and system monitoring
-
 ## Features
 
 - ✅ **Real-time Replication**: Instant synchronization using MongoDB change streams
@@ -113,7 +96,7 @@ GET /health
 #### Create Entity
 
 ```bash
-POST /api/entities
+POST /api/entity
 Content-Type: application/json
 
 {
@@ -155,19 +138,19 @@ Content-Type: application/json
 #### List Entities
 
 ```bash
-GET /api/entities
+GET /api/entity
 ```
 
 #### Get Entity
 
 ```bash
-GET /api/entities/{name}
+GET /api/entity/{name}
 ```
 
 #### Delete Entity
 
 ```bash
-DELETE /api/entities/{name}
+DELETE /api/entity/{name}
 ```
 
 ### Oplog Operations
@@ -283,17 +266,6 @@ Key configuration can be overridden with environment variables:
 - [ ] Configure backup strategies
 - [ ] Set up high availability for databases
 
-## Monitoring
-
-### Health Endpoints
-
-- `GET /health`: Basic health check
-- `GET /api/entities`: Entity status
-- System metrics through logging
-
-```bash
-RUST_LOG=debug ./emcache
-```
 
 ## Architecture Details
 
@@ -311,19 +283,3 @@ RUST_LOG=debug ./emcache
 - Graceful degradation during database failures
 - Transaction-based consistency guarantees
 - Health monitoring and alerting
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes with tests
-4. Ensure code quality checks pass
-5. Submit a pull request
-
-## License
-
-[License information]
-
-## Status
-
-🚀 **Production Ready** - Core functionality complete with comprehensive testing and monitoring.
