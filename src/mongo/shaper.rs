@@ -23,13 +23,39 @@ pub enum OplogError {
     ExtractDataError(String),
 }
 
-fn extract_data(doc: &bson::Document, shape: &Shape) -> anyhow::Result<Vec<Value>> {
+#[derive(Debug, Clone)]
+pub struct CompiledShape {
+    // TODO: Why is needed for mongo?
+    pub _id_path: JsonPath,
+    pub column_paths: Vec<JsonPath>,
+}
+
+impl CompiledShape {
+    pub fn new(shape: Shape) -> anyhow::Result<Self> {
+        let id_path = JsonPath::parse(&shape.id_column.path)
+            .context(format!("Failed to parse id column path: {}", shape.id_column.path))?;
+
+        let mut column_paths = Vec::with_capacity(shape.columns.len());
+        for column in &shape.columns {
+            let path = JsonPath::parse(&column.path).context(format!(
+                "Failed to parse column path '{}': {}",
+                column.name, column.path
+            ))?;
+            column_paths.push(path);
+        }
+
+        Ok(Self {
+            _id_path: id_path,
+            column_paths,
+        })
+    }
+}
+
+fn extract_data(doc: &bson::Document, shape: &CompiledShape) -> anyhow::Result<Vec<Value>> {
     let doc = serde_json::to_value(doc)?;
     let mut data = Vec::new();
-    for column in &shape.columns {
-        // Cache the parsed path
-        let path = JsonPath::parse(&column.path).context(format!("Failed to parse path: {}", column.path))?;
-        let value = path.query(&doc).first().cloned().unwrap_or(Value::Null);
+    for column in &shape.column_paths {
+        let value = column.query(&doc).first().cloned().unwrap_or(Value::Null);
         data.push(value);
     }
 
@@ -39,6 +65,7 @@ fn extract_data(doc: &bson::Document, shape: &Shape) -> anyhow::Result<Vec<Value
 pub fn map_oplog_from_change(
     event: ChangeStreamEvent<bson::Document>,
     entity: &Entity,
+    shape: &CompiledShape,
 ) -> Result<Option<OplogEvent>, OplogError> {
     let operation = match event.operation_type {
         OperationType::Insert | OperationType::Update | OperationType::Replace => Operation::Upsert,
@@ -67,7 +94,7 @@ pub fn map_oplog_from_change(
 
     let data = event
         .full_document
-        .map(|doc| extract_data(&doc, &entity.shape))
+        .map(|doc| extract_data(&doc, shape))
         .transpose()
         .map_err(|e| OplogError::ExtractDataError(e.to_string()))?
         .map(Value::Array)
@@ -87,14 +114,18 @@ pub fn map_oplog_from_change(
     }))
 }
 
-pub fn map_oplog_from_document(document: bson::Document, entity: &Entity) -> Result<OplogEvent, OplogError> {
+pub fn map_oplog_from_document(
+    document: bson::Document,
+    entity: &Entity,
+    shape: &CompiledShape,
+) -> Result<OplogEvent, OplogError> {
     let doc_id = document
         .get("_id")
         .context("Document id is not present")
         .map_err(|e| OplogError::DocumentError(e.to_string()))?;
     let doc_id = extract_doc_id(doc_id).map_err(|e| OplogError::DocumentError(e.to_string()))?;
 
-    let data = extract_data(&document, &entity.shape).map_err(|e| OplogError::ExtractDataError(e.to_string()))?;
+    let data = extract_data(&document, shape).map_err(|e| OplogError::ExtractDataError(e.to_string()))?;
 
     Ok(OplogEvent {
         oplog: Oplog {

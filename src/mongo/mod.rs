@@ -31,7 +31,7 @@ use crate::{
     config::Configs,
     entity::EntityManager,
     executor::Task,
-    mongo::shaper::OplogError,
+    mongo::shaper::{CompiledShape, OplogError},
     types::{Entity, OplogEvent},
 };
 pub use resume_token::ResumeTokenManager;
@@ -45,6 +45,7 @@ enum StreamError {
 }
 
 type StreamResult = Result<Entity, StreamError>;
+type OplogStream = Pin<Box<dyn Stream<Item = Result<OplogEvent, OplogError>> + Send + 'static>>;
 
 pub struct MongoClient {
     sources: HashMap<String, Database>,
@@ -210,6 +211,7 @@ impl MongoClient {
         let event_channel = self.event_channel.clone();
         let token_manager = self.token_manager.clone();
         let sources = self.sources.clone();
+        let shape = CompiledShape::new(entity.shape.clone())?;
 
         let source_db = sources
             .get(&entity.client)
@@ -217,7 +219,7 @@ impl MongoClient {
             .clone();
 
         let handle = join_set.spawn(async move {
-            Self::stream_entity_changes(token_manager, source_db, event_channel, entity_clone).await
+            Self::stream_entity_changes(token_manager, source_db, event_channel, entity_clone, shape).await
         });
 
         Ok(handle)
@@ -228,12 +230,13 @@ impl MongoClient {
         source_db: Database,
         event_channel: mpsc::Sender<OplogEvent>,
         entity: Entity,
+        shape: CompiledShape,
     ) -> StreamResult {
         let entity_name = &entity.name;
         let source = &entity.source;
         info!("Starting changestream for entity: {entity_name} (source: {source})");
 
-        let mut stream = create_change_stream(token_manager, &source_db, &entity)
+        let mut stream = create_change_stream(token_manager, &source_db, &entity, &shape)
             .await
             .map_err(|e| StreamError::StreamError(entity.clone(), e))?;
 
@@ -290,16 +293,23 @@ async fn create_change_stream(
     resume_token_manager: Arc<ResumeTokenManager>,
     database: &Database,
     entity: &Entity,
-) -> anyhow::Result<Pin<Box<dyn Stream<Item = Result<OplogEvent, OplogError>> + Send>>> {
+    shape: &CompiledShape,
+) -> anyhow::Result<OplogStream> {
     let entity_name = entity.name.clone();
     let resume_token = resume_token_manager.fetch(&entity_name).await?;
     let resume_token = resume_token.map(|token| token.token_data());
     let Some(resume_token) = resume_token else {
         info!("Starting stream for entity '{}' without resume token", entity_name);
-        return restart_stream(database, entity.clone()).await;
+        return restart_stream(database, entity.clone(), shape).await;
     };
 
-    let change_stream = start_stream(database.collection(&entity.source), Some(resume_token), entity.clone()).await;
+    let change_stream = start_stream(
+        database.collection(&entity.source),
+        Some(resume_token),
+        entity.clone(),
+        shape.clone(),
+    )
+    .await;
 
     match change_stream {
         Ok(change_stream) => {
@@ -308,46 +318,42 @@ async fn create_change_stream(
         }
         Err(e) if resume_token_error(&e) => {
             error!("resume token error {e:?} for entity '{entity_name}', restarting stream");
-            restart_stream(database, entity.clone()).await
+            restart_stream(database, entity.clone(), shape).await
         }
         Err(e) => Err(e),
     }
 }
 
-async fn restart_stream(
-    database: &Database,
-    entity: Entity,
-) -> anyhow::Result<Pin<Box<dyn Stream<Item = Result<OplogEvent, OplogError>> + Send>>> {
-    let scan_stream = collection_scan(database, entity.clone()).await?;
-    let change_stream = start_stream(database.collection(&entity.source), None, entity.clone()).await?;
+async fn restart_stream(database: &Database, entity: Entity, shape: &CompiledShape) -> anyhow::Result<OplogStream> {
+    let scan_stream = collection_scan(database, entity.clone(), shape.clone()).await?;
+    let change_stream = start_stream(database.collection(&entity.source), None, entity.clone(), shape.clone()).await?;
     Ok(scan_stream.chain(change_stream).boxed())
 }
 
-async fn collection_scan(
-    database: &Database,
-    entity: Entity,
-) -> anyhow::Result<impl Stream<Item = Result<OplogEvent, OplogError>> + Send + 'static> {
+async fn collection_scan(database: &Database, entity: Entity, shape: CompiledShape) -> anyhow::Result<OplogStream> {
     let cursor = database.collection(&entity.source).find(bson::doc! {}).await?;
     info!("Starting collection scan for entity '{}'", &entity.name);
+
     let entity_name = entity.name.clone();
     let resync = stream::once({
         let entity_name = entity_name.clone();
         async move { Ok(shaper::restart_sync_oplog(entity_name)) }
     });
-    let stream = cursor.map(move |change| shaper::map_oplog_from_document(change.unwrap(), &entity));
+    let stream = cursor.map(move |change| shaper::map_oplog_from_document(change.unwrap(), &entity, &shape));
     let end = stream::once({
         let entity_name = entity_name.clone();
         async move { Ok(shaper::end_sync_oplog(entity_name)) }
     });
 
-    Ok(resync.chain(stream).chain(end))
+    Ok(resync.chain(stream).chain(end).boxed())
 }
 
 async fn start_stream(
     collection: Collection<Document>,
     resume_token: Option<ResumeToken>,
     entity: Entity,
-) -> anyhow::Result<impl Stream<Item = Result<OplogEvent, OplogError>> + Send + 'static> {
+    shape: CompiledShape,
+) -> anyhow::Result<OplogStream> {
     let post_image = FullDocumentType::UpdateLookup;
     let stream = collection
         .watch()
@@ -358,10 +364,10 @@ async fn start_stream(
     info!("Started change stream for entity '{}'", &entity.name);
 
     let stream = stream
-        .map(move |change| shaper::map_oplog_from_change(change.unwrap(), &entity))
+        .map(move |change| shaper::map_oplog_from_change(change.unwrap(), &entity, &shape))
         .filter_map(async move |oplog| oplog.transpose());
 
-    Ok(stream)
+    Ok(stream.boxed())
 }
 
 impl Task for MongoClient {
