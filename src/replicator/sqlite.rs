@@ -112,10 +112,10 @@ impl SqliteManager {
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.is_dir() {
-                if let Some(entity_name) = path.file_name().and_then(|n| n.to_str()) {
-                    cached_entities.push(entity_name.to_string());
-                }
+            if path.is_dir()
+                && let Some(entity_name) = path.file_name().and_then(|n| n.to_str())
+            {
+                cached_entities.push(entity_name.to_string());
             }
         }
 

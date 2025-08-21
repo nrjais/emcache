@@ -27,10 +27,10 @@ impl DeleteOnDrop {
 
 impl Drop for DeleteOnDrop {
     fn drop(&mut self) {
-        if Arc::strong_count(&self._ref_count) == 1 {
-            if let Err(e) = std::fs::remove_file(&self.path) {
-                error!("Failed to remove snapshot file {:?}: {}", self.path, e);
-            }
+        if Arc::strong_count(&self._ref_count) == 1
+            && let Err(e) = std::fs::remove_file(&self.path)
+        {
+            error!("Failed to remove snapshot file {:?}: {}", self.path, e);
         }
     }
 }
