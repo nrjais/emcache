@@ -177,6 +177,13 @@ func (e *localCache) ApplyOplogs(ctx context.Context, oplogs []Oplog) error {
 			}
 			currentMode = ModeLive
 
+		case OperationTombstone:
+			return &TombstoneError{
+				EntityName: e.details.Name,
+				OplogID:    entry.ID,
+				Message:    "received tombstone oplog, redownload required",
+			}
+
 		default:
 			// Unknown operation, skip
 		}

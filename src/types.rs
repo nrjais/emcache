@@ -12,6 +12,7 @@ pub enum Operation {
     Delete,
     SyncStart,
     SyncEnd,
+    Tombstone,
 }
 
 impl From<String> for Operation {
@@ -21,6 +22,7 @@ impl From<String> for Operation {
             "delete" => Operation::Delete,
             "sync_start" => Operation::SyncStart,
             "sync_end" => Operation::SyncEnd,
+            "tombstone" => Operation::Tombstone,
             _ => Operation::Upsert,
         }
     }
@@ -33,6 +35,7 @@ impl std::fmt::Display for Operation {
             Operation::Delete => write!(f, "delete"),
             Operation::SyncStart => write!(f, "sync_start"),
             Operation::SyncEnd => write!(f, "sync_end"),
+            Operation::Tombstone => write!(f, "tombstone"),
         }
     }
 }
@@ -46,6 +49,7 @@ impl FromStr for Operation {
             "delete" => Ok(Operation::Delete),
             "sync_start" => Ok(Operation::SyncStart),
             "sync_end" => Ok(Operation::SyncEnd),
+            "tombstone" => Ok(Operation::Tombstone),
             _ => Err(anyhow::anyhow!("Invalid operation: {}", s)),
         }
     }

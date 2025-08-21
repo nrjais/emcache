@@ -15,6 +15,20 @@ EMCache is a distributed caching system designed to replicate MongoDB data to fa
 - ✅ **Comprehensive API**: Full CRUD operations with detailed system monitoring
 - ✅ **Production Ready**: Complete with health checks, metrics, and deployment configuration
 - ✅ **Snapshot Support**: Point-in-time data snapshots for backup and recovery
+- ✅ **Automatic Cleanup**: Daily oplog cleanup with tombstone-based client redownload
+
+### Oplog Cleanup & Tombstone Feature
+
+EMCache automatically manages oplog storage with a configurable cleanup system:
+
+- **Daily Cleanup**: Removes oplogs older than the configured retention period (default: 7 days)
+- **Tombstone Oplogs**: When old oplogs are deleted, a tombstone oplog is created for each entity
+- **Automatic Client Recovery**: When clients receive a tombstone oplog, they automatically:
+  - Redownload the complete database snapshot
+  - Resume synchronization from the tombstone point
+  - Continue normal operation seamlessly
+
+This ensures efficient storage management while maintaining data consistency and automatic client recovery.
 
 ## Quick Start
 
@@ -81,6 +95,10 @@ entity_refresh_interval = 10
 [snapshot]
 check_interval = 10
 min_lag = 100
+
+[oplog]
+cleanup_interval = 86400  # 24 hours in seconds
+retention_days = 7
 ```
 
 ## API Reference
