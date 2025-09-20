@@ -25,16 +25,11 @@ pub enum OplogError {
 
 #[derive(Debug, Clone)]
 pub struct CompiledShape {
-    // TODO: Why is needed for mongo?
-    pub _id_path: JsonPath,
     pub column_paths: Vec<JsonPath>,
 }
 
 impl CompiledShape {
     pub fn new(shape: Shape) -> anyhow::Result<Self> {
-        let id_path = JsonPath::parse(&shape.id_column.path)
-            .context(format!("Failed to parse id column path: {}", shape.id_column.path))?;
-
         let mut column_paths = Vec::with_capacity(shape.columns.len());
         for column in &shape.columns {
             let path = JsonPath::parse(&column.path).context(format!(
@@ -44,10 +39,7 @@ impl CompiledShape {
             column_paths.push(path);
         }
 
-        Ok(Self {
-            _id_path: id_path,
-            column_paths,
-        })
+        Ok(Self { column_paths })
     }
 }
 
