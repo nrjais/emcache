@@ -331,7 +331,11 @@ async fn restart_stream(database: &Database, entity: Entity, shape: &CompiledSha
 }
 
 async fn collection_scan(database: &Database, entity: Entity, shape: CompiledShape) -> anyhow::Result<OplogStream> {
-    let cursor = database.collection(&entity.source).find(bson::doc! {}).await?;
+    let cursor = database
+        .collection(&entity.source)
+        .find(bson::doc! {})
+        .batch_size(1000)
+        .await?;
     info!("Starting collection scan for entity '{}'", &entity.name);
 
     let entity_name = entity.name.clone();

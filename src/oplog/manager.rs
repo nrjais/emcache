@@ -24,7 +24,7 @@ impl OplogManager {
         db_ops: OplogDatabase,
         ack_sender: broadcast::Sender<OplogEvent>,
     ) -> Result<(Self, mpsc::Sender<OplogEvent>)> {
-        let (sender, receiver) = mpsc::channel(1000);
+        let (sender, receiver) = mpsc::channel(2000);
 
         let manager = Self {
             db_ops,
