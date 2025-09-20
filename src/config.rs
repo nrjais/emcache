@@ -58,6 +58,14 @@ pub struct SnapshotConfig {
     pub min_lag: u64,
 }
 
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OplogConfig {
+    #[serde_as(as = "DurationSecondsWithFrac<f64>")]
+    pub cleanup_interval: Duration,
+    pub retention_days: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Configs {
     pub server: ServerConfig,
@@ -66,6 +74,7 @@ pub struct Configs {
     pub sources: HashMap<String, SourceConfig>,
     pub cache: CacheConfig,
     pub snapshot: SnapshotConfig,
+    pub oplog: OplogConfig,
 }
 
 impl Configs {
