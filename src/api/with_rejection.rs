@@ -4,8 +4,8 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use axum_extra::extract::QueryRejection;
 use serde_json::json;
-use serde_qs::axum::QsQueryRejection;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -13,7 +13,7 @@ pub enum ApiError {
     #[error(transparent)]
     JsonExtractorRejection(#[from] JsonRejection),
     #[error(transparent)]
-    QsQueryExtractorRejection(#[from] QsQueryRejection),
+    QsQueryExtractorRejection(#[from] QueryRejection),
 }
 
 impl IntoResponse for ApiError {

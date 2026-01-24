@@ -9,7 +9,7 @@ use mongodb::{
 use serde_json::Value;
 use serde_json_path::JsonPath;
 use thiserror::Error;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use crate::types::{Entity, Operation, Oplog, OplogEvent, OplogFrom, Shape};
 

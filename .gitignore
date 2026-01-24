@@ -4,3 +4,5 @@ caches
 Yaak
 *.session.sql
 *.test
+*.gz
+*.zstd
