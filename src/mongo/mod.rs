@@ -334,7 +334,7 @@ async fn collection_scan(database: &Database, entity: Entity, shape: CompiledSha
     let cursor = database
         .collection(&entity.source)
         .find(bson::doc! {})
-        .batch_size(1000)
+        .batch_size(5000)
         .await?;
     info!("Starting collection scan for entity '{}'", &entity.name);
 
