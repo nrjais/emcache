@@ -16,7 +16,7 @@ deadpool-postgres = "0.14"
 futures = "0.3"
 futures-batch = "0.7"
 garde = { version = "0.22", features = ["derive"] }
-mongodb = "3.2"
+mongodb = "3.6"
 rusqlite = { version = "0.32", features = [
   "backup",
   "bundled",
