@@ -10,7 +10,7 @@ use crate::config::Configs;
 use crate::entity::EntityManager;
 use crate::executor::TaskServer;
 use crate::mongo::{MongoClient, ResumeTokenManager};
-use crate::oplog::{OplogDatabase, OplogManager};
+use crate::oplog::{OplogCleanupTask, OplogDatabase, OplogManager};
 use crate::replicator::Replicator;
 use crate::replicator::metadata::MetadataDb;
 use crate::replicator::sqlite::SqliteManager;
@@ -63,6 +63,13 @@ impl Systems {
 
         snapshot_manager.init().await?;
 
+        let oplog_cleanup_task = OplogCleanupTask::new(
+            postgres_client.clone(),
+            entity_manager.clone(),
+            conf.oplog.cleanup_interval,
+            conf.oplog.retention_days,
+        );
+
         let task_server = TaskServer::new();
 
         register_tasks(
@@ -73,6 +80,7 @@ impl Systems {
             &task_server,
             resume_token_manager,
             &snapshot_manager,
+            oplog_cleanup_task,
         )
         .await?;
 
@@ -85,6 +93,7 @@ impl Systems {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn register_tasks(
     oplog_manager: OplogManager,
     mongo_client: MongoClient,
@@ -93,6 +102,7 @@ async fn register_tasks(
     task_server: &TaskServer,
     resume_token_manager: Arc<ResumeTokenManager>,
     snapshot_manager: &Arc<SnapshotManager>,
+    oplog_cleanup_task: OplogCleanupTask,
 ) -> Result<(), anyhow::Error> {
     task_server.register(mongo_client).await?;
     task_server.register(oplog_manager).await?;
@@ -100,6 +110,7 @@ async fn register_tasks(
     task_server.register(Arc::clone(entity_manager)).await?;
     task_server.register(resume_token_manager).await?;
     task_server.register(Arc::clone(snapshot_manager)).await?;
+    task_server.register(oplog_cleanup_task).await?;
     Ok(())
 }
 

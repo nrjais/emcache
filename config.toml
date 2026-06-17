@@ -24,3 +24,7 @@ entity_refresh_interval = 10
 [snapshot]
 check_interval = 10
 min_lag = 100
+
+[oplog]
+cleanup_interval = 86400
+retention_days = 7

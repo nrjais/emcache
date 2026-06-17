@@ -118,6 +118,12 @@ impl LocalCache {
                         current_mode = Mode::Live;
                     }
                 }
+                Operation::Tombstone => {
+                    unreachable!(
+                        "Received tombstone oplog for entity {}, oplog ID: {}",
+                        self.entity.name, oplog.id
+                    );
+                }
             }
             processed_count += 1;
             max_processed_id = max_processed_id.max(oplog.id as u64);

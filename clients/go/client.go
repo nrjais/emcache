@@ -31,6 +31,7 @@ package emcache
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -54,6 +55,7 @@ const (
 	OperationDelete    Operation = "delete"
 	OperationSyncStart Operation = "sync_start"
 	OperationSyncEnd   Operation = "sync_end"
+	OperationTombstone Operation = "tombstone"
 )
 
 // Data types for shape columns
@@ -137,6 +139,17 @@ func (e ErrorResponse) Error() string {
 		return fmt.Sprintf("errors: %s", strings.Join(e.Errors, ", "))
 	}
 	return fmt.Sprintf("reason: %s", e.Reason)
+}
+
+// TombstoneError is returned when a tombstone oplog is encountered
+type TombstoneError struct {
+	EntityName string
+	OplogID    int64
+	Message    string
+}
+
+func (e *TombstoneError) Error() string {
+	return fmt.Sprintf("tombstone for entity '%s' at oplog ID %d: %s", e.EntityName, e.OplogID, e.Message)
 }
 
 // Config holds the configuration for the EmCache client.
@@ -536,6 +549,18 @@ func (c *Client) applyOplogEntries(ctx context.Context, entries []Oplog) (int64,
 
 		err := state.entity.ApplyOplogs(ctx, entityEntries)
 		if err != nil {
+			var tombstoneErr *TombstoneError
+			if errors.As(err, &tombstoneErr) {
+				c.logger.Info("Received tombstone oplog, triggering redownload", "entity", tombstoneErr.EntityName, "oplog_id", tombstoneErr.OplogID)
+
+				if redownloadErr := c.redownloadEntity(ctx, tombstoneErr.EntityName, tombstoneErr.OplogID); redownloadErr != nil {
+					return c.lastOplogIdx, fmt.Errorf("failed to redownload entity '%s' after tombstone: %w", tombstoneErr.EntityName, redownloadErr)
+				}
+
+				c.logger.Info("Entity redownload completed, resuming sync", "entity", tombstoneErr.EntityName)
+				continue
+			}
+
 			return c.lastOplogIdx, fmt.Errorf("failed to apply oplog entries to entity '%s': %w", entityName, err)
 		}
 	}
@@ -716,4 +741,40 @@ func (c *Client) syncBatches(ctx context.Context, batchCount int) (bool, error) 
 	}
 
 	return true, nil
+}
+
+// redownloadEntity redownloads and reinitializes an entity after a tombstone is received
+func (c *Client) redownloadEntity(ctx context.Context, entityName string, tombstoneOplogID int64) error {
+	c.logger.Info("Starting entity redownload due to tombstone", "entity", entityName, "oplog_id", tombstoneOplogID)
+
+	state, ok := c.entities[entityName]
+	if !ok {
+		return fmt.Errorf("entity '%s' not found", entityName)
+	}
+
+	if state.entity != nil {
+		if err := state.entity.Close(); err != nil {
+			c.logger.Warn("Failed to close existing database connection", "entity", entityName, "error", err)
+		}
+	}
+
+	dbPath := filepath.Join(c.config.Directory, entityName+".db")
+	if err := os.Remove(dbPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove existing database file: %w", err)
+	}
+
+	entitiesData, err := c.getEntitiesFromServer(ctx, []string{entityName})
+	if err != nil {
+		return fmt.Errorf("failed to get entity data from server: %w", err)
+	}
+
+	newState, err := c.initializeEntity(ctx, entityName, entitiesData)
+	if err != nil {
+		return fmt.Errorf("failed to reinitialize entity: %w", err)
+	}
+
+	c.entities[entityName] = newState
+
+	c.logger.Info("Entity redownload completed successfully", "entity", entityName, "oplog_id", tombstoneOplogID)
+	return nil
 }

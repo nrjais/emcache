@@ -22,7 +22,9 @@ CREATE TABLE oplog (
     created_at TIMESTAMP
     WITH
         TIME ZONE DEFAULT NOW () NOT NULL,
-        CONSTRAINT oplog_operation_check CHECK (operation IN ('upsert', 'delete', 'sync_start', 'sync_end'))
+    CONSTRAINT oplog_operation_check CHECK (
+        operation IN ('upsert', 'delete', 'sync_start', 'sync_end', 'tombstone')
+    )
 );
 
 -- Resume tokens table for MongoDB change streams
